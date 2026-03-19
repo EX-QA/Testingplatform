@@ -1,10 +1,11 @@
-import { useState, useEffect } from 'react'
-import { Plus, Search, Edit, Trash2, X, ChevronRight, ChevronDown, Package, FolderOpen } from 'lucide-react'
+import { useState, useEffect, useRef } from 'react'
+import { Plus, Search, Edit, Trash2, X, ChevronRight, ChevronDown, Package, FolderOpen, Upload, CheckCircle, XCircle, Download } from 'lucide-react'
 import { DndContext, DragOverlay, closestCenter, PointerSensor, useSensor, useSensors, useDroppable } from '@dnd-kit/core'
 import { SortableContext, verticalListSortingStrategy, useSortable } from '@dnd-kit/sortable'
 import { CSS } from '@dnd-kit/utilities'
 import { testCasesApi, projectsApi, testSuitesApi, foldersApi } from '../services/api'
 import ConfirmDialog from '../components/ConfirmDialog'
+import TruncatedCell from '../components/TruncatedCell'
 
 interface TestCase {
   id: string
@@ -108,11 +109,6 @@ function SortableTestCaseItem({ testCase, onEdit, onDelete }: { testCase: TestCa
           {testCase.priority === 'high' ? '高' : testCase.priority === 'medium' ? '中' : '低'}
         </span>
       </td>
-      <td>
-        <span className={`badge badge-${testCase.status}`}>
-          {testCase.status === 'draft' ? '草稿' : testCase.status === 'executing' ? '执行中' : testCase.status === 'passed' ? '通过' : testCase.status === 'failed' ? '失败' : '阻塞'}
-        </span>
-      </td>
       <td>{testCase.creatorName || '-'}</td>
       <td>{testCase.createdAt ? new Date(testCase.createdAt).toLocaleDateString() : '-'}</td>
       <td>
@@ -178,6 +174,17 @@ export default function TestCases() {
   // 删除状态
   const [deleteTarget, setDeleteTarget] = useState<{ type: 'project' | 'suite' | 'folder'; id: string; name: string } | null>(null)
   const [deleteCaseId, setDeleteCaseId] = useState<string | null>(null)
+
+  // 导入弹窗状态
+  const [showImportModal, setShowImportModal] = useState(false)
+  const [importFile, setImportFile] = useState<File | null>(null)
+  const [importResult, setImportResult] = useState<{ success: boolean; total: number; imported: number; failed: number; errors: { row: number; message: string }[] } | null>(null)
+  const [importing, setImporting] = useState(false)
+  const [previewData, setPreviewData] = useState<string[][]>([])
+  const [importProjectId, setImportProjectId] = useState<string>('')
+  const [importSuiteId, setImportSuiteId] = useState<string>('')
+  const [importFolderId, setImportFolderId] = useState<string>('')
+  const importResultRef = useRef<HTMLDivElement>(null)
 
   const user = getUser()
 
@@ -355,6 +362,192 @@ export default function TestCases() {
     }
   }
 
+  // 正确的 CSV 解析函数（处理引号内换行）
+  function parseCSVRows(text: string, maxRows: number): string[][] {
+    const rows: string[][] = []
+    let currentRow: string[] = []
+    let currentField = ''
+    let inQuotes = false
+    let rowCount = 0
+
+    for (let i = 0; i < text.length; i++) {
+      const char = text[i]
+      const nextChar = text[i + 1]
+
+      if (inQuotes) {
+        if (char === '"') {
+          if (nextChar === '"') {
+            // 转义的双引号
+            currentField += '"'
+            i++
+          } else {
+            // 结束引号
+            inQuotes = false
+          }
+        } else {
+          currentField += char
+        }
+      } else {
+        if (char === '"') {
+          inQuotes = true
+        } else if (char === ',') {
+          currentRow.push(currentField.trim())
+          currentField = ''
+        } else if (char === '\n' || (char === '\r' && nextChar === '\n')) {
+          // 行结束
+          currentRow.push(currentField.trim())
+          if (currentRow.some(f => f.length > 0)) {
+            rows.push(currentRow)
+            rowCount++
+            if (rowCount >= maxRows) return rows
+          }
+          currentRow = []
+          currentField = ''
+          if (char === '\r') i++ // 跳过 \r
+        } else if (char !== '\r') {
+          currentField += char
+        }
+      }
+    }
+
+    // 最后一行
+    if (currentField.length > 0 || currentRow.length > 0) {
+      currentRow.push(currentField.trim())
+      if (currentRow.some(f => f.length > 0)) {
+        rows.push(currentRow)
+      }
+    }
+
+    return rows
+  }
+
+  // 处理文件选择
+  const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0]
+    if (file) {
+      setImportFile(file)
+      setImportResult(null)
+      // 预览 CSV 前 5 行
+      const reader = new FileReader()
+      reader.onload = (event) => {
+        const buffer = event.target?.result as ArrayBuffer
+        const bytes = new Uint8Array(buffer)
+
+        // Detect encoding and decode
+        let text: string
+        let hasUtf8Bom = bytes[0] === 0xEF && bytes[1] === 0xBB && bytes[2] === 0xBF
+        let startIndex = hasUtf8Bom ? 3 : 0
+        let contentBytes = bytes.slice(startIndex)
+
+        // Check if valid UTF-8
+        let isUtf8 = true
+        let i = 0
+        while (i < contentBytes.length) {
+          const byte = contentBytes[i]
+          if (byte > 127) {
+            let continuationBytes = 0
+            if ((byte & 0xE0) === 0xC0) continuationBytes = 1
+            else if ((byte & 0xF0) === 0xE0) continuationBytes = 2
+            else if ((byte & 0xF8) === 0xF0) continuationBytes = 3
+            else { isUtf8 = false; break }
+
+            if (i + continuationBytes >= contentBytes.length) { isUtf8 = false; break }
+            for (let j = 1; j <= continuationBytes; j++) {
+              if ((contentBytes[i + j] & 0xC0) !== 0x80) { isUtf8 = false; break }
+            }
+            if (!isUtf8) break
+            i += continuationBytes + 1
+          } else {
+            i++
+          }
+        }
+
+        if (isUtf8) {
+          text = new TextDecoder('utf-8').decode(bytes.slice(hasUtf8Bom ? 3 : 0))
+        } else {
+          // GBK/GB2312 fallback
+          text = new TextDecoder('gbk').decode(bytes)
+        }
+
+        // 正确解析 CSV（处理引号内换行）
+        const preview: string[][] = []
+        const rows = parseCSVRows(text, 6)
+        for (const row of rows) {
+          preview.push(row)
+        }
+        setPreviewData(preview)
+      }
+      reader.readAsArrayBuffer(file)
+    }
+  }
+
+  // 执行导入
+  const handleImport = async () => {
+    if (!importFile) return
+    setImporting(true)
+    setImportResult(null)
+
+    const formData = new FormData()
+    formData.append('file', importFile)
+    if (importProjectId) formData.append('projectId', importProjectId)
+    if (importSuiteId) formData.append('suiteId', importSuiteId)
+    if (importFolderId) formData.append('folderId', importFolderId)
+    if (user?.id) formData.append('creatorId', user.id)
+    if (user?.username) formData.append('creatorName', user.username)
+
+    try {
+      const res = await testCasesApi.importCsv(formData)
+      setImportResult(res.data)
+      if (res.data.imported > 0) {
+        fetchAllData()
+      }
+      // 滚动到导入结果
+      setTimeout(() => importResultRef.current?.scrollIntoView({ behavior: 'smooth', block: 'nearest' }), 100)
+    } catch (error: any) {
+      setImportResult({
+        success: false,
+        total: 0,
+        imported: 0,
+        failed: 0,
+        errors: [{ row: 0, message: error.response?.data?.error || '导入失败' }]
+      })
+      // 滚动到导入结果
+      setTimeout(() => importResultRef.current?.scrollIntoView({ behavior: 'smooth', block: 'nearest' }), 100)
+    } finally {
+      setImporting(false)
+    }
+  }
+
+  // 下载 CSV 模板
+  const handleDownloadTemplate = async () => {
+    try {
+      const API_BASE_URL = ''
+      const response = await fetch(`${API_BASE_URL}/api/v1/test-cases/template`)
+      const blob = await response.blob()
+      const url = window.URL.createObjectURL(blob)
+      const a = document.createElement('a')
+      a.href = url
+      a.download = 'test_case_template.csv'
+      document.body.appendChild(a)
+      a.click()
+      a.remove()
+      window.URL.revokeObjectURL(url)
+    } catch (error) {
+      console.error('Failed to download template:', error)
+    }
+  }
+
+  // 关闭导入弹窗并重置状态
+  const closeImportModal = () => {
+    setShowImportModal(false)
+    setImportFile(null)
+    setImportResult(null)
+    setPreviewData([])
+    setImportProjectId('')
+    setImportSuiteId('')
+    setImportFolderId('')
+  }
+
   const handleDeleteEntity = async () => {
     if (!deleteTarget) return
     try {
@@ -457,14 +650,22 @@ export default function TestCases() {
       >
         <header className="page-header">
           <h2>测试用例</h2>
-          <button
-            className="btn btn-primary"
-            onClick={() => { setEditingCase(null); setShowModal(true) }}
-            disabled={!selectedProject}
-            title={!selectedProject ? '请先选择一个项目' : '新建用例'}
-          >
-            <Plus size={18} />新建用例
-          </button>
+          <div style={{ display: 'flex', gap: '8px' }}>
+            <button
+              className="btn btn-secondary"
+              onClick={() => setShowImportModal(true)}
+            >
+              <Upload size={18} />导入
+            </button>
+            {selectedProject && (
+              <button
+                className="btn btn-primary"
+                onClick={() => { setEditingCase(null); setShowModal(true) }}
+              >
+                <Plus size={18} />新建用例
+              </button>
+            )}
+          </div>
         </header>
 
         <div className="page-content">
@@ -634,12 +835,7 @@ export default function TestCases() {
               ) : displayCases.length === 0 ? (
                 <div className="empty-state">
                   {selectedProject ? (
-                    <>
-                      <p>暂无测试用例</p>
-                      <button className="btn btn-primary" onClick={() => setShowModal(true)}>
-                        <Plus size={18} />新建用例
-                      </button>
-                    </>
+                    <p>暂无测试用例，请点击右上角的「新建用例」按钮添加</p>
                   ) : (
                     <p>请在左侧选择一个项目以查看测试用例</p>
                   )}
@@ -656,7 +852,6 @@ export default function TestCases() {
                           <th>模块</th>
                           <th>类型</th>
                           <th>优先级</th>
-                          <th>状态</th>
                           <th>创建者</th>
                           <th>创建时间</th>
                           <th>操作</th>
@@ -724,16 +919,6 @@ export default function TestCases() {
                       <option value="high">高</option>
                       <option value="medium">中</option>
                       <option value="low">低</option>
-                    </select>
-                  </div>
-                  <div className="form-group">
-                    <label className="form-label">状态</label>
-                    <select name="status" className="form-select" defaultValue={editingCase?.status || 'draft'}>
-                      <option value="draft">草稿</option>
-                      <option value="executing">执行中</option>
-                      <option value="passed">通过</option>
-                      <option value="failed">失败</option>
-                      <option value="blocked">阻塞</option>
                     </select>
                   </div>
                 </div>
@@ -882,6 +1067,189 @@ export default function TestCases() {
           onCancel={() => setDeleteCaseId(null)}
           variant="danger"
         />
+      )}
+
+      {/* 导入 CSV 弹窗 */}
+      {showImportModal && (
+        <div className="modal-overlay" onClick={closeImportModal}>
+          <div className="modal" onClick={e => e.stopPropagation()} style={{ maxWidth: '600px' }}>
+            <div className="modal-header">
+              <h3>批量导入测试用例</h3>
+              <button className="btn btn-secondary btn-sm" onClick={closeImportModal}>
+                <X size={18} />
+              </button>
+            </div>
+            <div className="modal-body">
+              {/* 目标层级选择 */}
+              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: '12px', marginBottom: '16px' }}>
+                <div className="form-group">
+                  <label className="form-label">项目</label>
+                  <select
+                    className="form-select"
+                    value={importProjectId}
+                    onChange={e => { setImportProjectId(e.target.value); setImportSuiteId(''); setImportFolderId('') }}
+                  >
+                    <option value="">选择项目</option>
+                    {projects.map(p => (
+                      <option key={p.id} value={p.id}>{p.name}</option>
+                    ))}
+                  </select>
+                </div>
+                <div className="form-group">
+                  <label className="form-label">测试套件</label>
+                  <select
+                    className="form-select"
+                    value={importSuiteId}
+                    onChange={e => { setImportSuiteId(e.target.value); setImportFolderId('') }}
+                    disabled={!importProjectId}
+                  >
+                    <option value="">选择套件</option>
+                    {suites.filter(s => s.projectId === importProjectId).map(s => (
+                      <option key={s.id} value={s.id}>{s.name}</option>
+                    ))}
+                  </select>
+                </div>
+                <div className="form-group">
+                  <label className="form-label">文件夹</label>
+                  <select
+                    className="form-select"
+                    value={importFolderId}
+                    onChange={e => setImportFolderId(e.target.value)}
+                    disabled={!importSuiteId}
+                  >
+                    <option value="">选择文件夹</option>
+                    {folders.filter(f => f.suiteId === importSuiteId && !f.parentId).map(f => (
+                      <option key={f.id} value={f.id}>{f.name}</option>
+                    ))}
+                  </select>
+                </div>
+              </div>
+
+              {/* 文件选择 */}
+              <div className="form-group">
+                <label className="form-label">选择 CSV 文件</label>
+                <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
+                  <label
+                    className="btn btn-primary"
+                    style={{ cursor: 'pointer' }}
+                  >
+                    <Upload size={18} />
+                    {importFile ? '重新选择' : '选择文件'}
+                    <input
+                      type="file"
+                      accept=".csv"
+                      multiple={false}
+                      onChange={handleFileChange}
+                      style={{ display: 'none' }}
+                    />
+                  </label>
+                  {importFile && (
+                    <span style={{ fontSize: '14px', color: 'var(--text-secondary)' }}>
+                      {importFile.name}
+                    </span>
+                  )}
+                </div>
+              </div>
+
+              {/* CSV 模板说明 */}
+              <div style={{ fontSize: '13px', color: 'var(--text-secondary)', marginBottom: '16px' }}>
+                <p>CSV 格式要求：</p>
+                <ul style={{ margin: '8px 0', paddingLeft: '20px' }}>
+                  <li>标题（title）和测试步骤（steps）为必填字段</li>
+                  <li>可选字段：module, priority, type, precondition, expectedResult</li>
+                  <li>priority 可选值：high, medium, low</li>
+                  <li>type 可选值：functional, api, performance, ui</li>
+                </ul>
+                <button
+                  className="btn btn-secondary"
+                  onClick={handleDownloadTemplate}
+                  style={{ marginTop: '8px', display: 'inline-flex', alignItems: 'center', gap: '6px' }}
+                >
+                  <Download size={16} />
+                  下载模板文件
+                </button>
+              </div>
+
+              {/* 预览 */}
+              {previewData.length > 0 && (
+                <div style={{ marginBottom: '16px' }}>
+                  <div style={{ fontSize: '14px', fontWeight: 500, marginBottom: '8px' }}>预览（前 5 行）：</div>
+                  <div style={{ overflowX: 'auto', fontSize: '12px' }}>
+                    <table style={{ width: '100%', borderCollapse: 'collapse', tableLayout: 'fixed' }}>
+                      <thead>
+                        <tr>
+                          {previewData[0].map((header, i) => (
+                            <th key={i} style={{ border: '1px solid var(--border-color)', padding: '6px 8px', textAlign: 'left', background: 'var(--bg-secondary)', width: i === previewData[0].length - 1 ? '200px' : '120px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{header}</th>
+                          ))}
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {previewData.slice(1, 6).map((row, i) => (
+                          <tr key={i}>
+                            {row.map((cell, j) => (
+                              <TruncatedCell key={j} content={cell} />
+                            ))}
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                </div>
+              )}
+
+              {/* 导入结果 */}
+              {importResult && (
+                <div ref={importResultRef} style={{ padding: '16px', background: importResult.success ? 'rgba(16, 185, 129, 0.1)' : 'rgba(239, 68, 68, 0.1)', borderRadius: '8px' }}>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '12px' }}>
+                    {importResult.success ? (
+                      <CheckCircle size={20} style={{ color: '#10b981' }} />
+                    ) : (
+                      <XCircle size={20} style={{ color: '#ef4444' }} />
+                    )}
+                    <span style={{ fontWeight: 500 }}>
+                      {importResult.success ? '导入完成' : '导入失败'}
+                    </span>
+                  </div>
+                  <div style={{ fontSize: '13px', display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: '12px' }}>
+                    <div>总行数：{importResult.total}</div>
+                    <div style={{ color: '#10b981' }}>成功：{importResult.imported}</div>
+                    <div style={{ color: importResult.failed > 0 ? '#ef4444' : 'inherit' }}>失败：{importResult.failed}</div>
+                  </div>
+                  {importResult.errors && importResult.errors.length > 0 && (
+                    <div style={{ marginTop: '12px', fontSize: '12px', color: 'var(--text-secondary)' }}>
+                      <div style={{ fontWeight: 500, marginBottom: '4px' }}>错误详情：</div>
+                      {importResult.errors.slice(0, 5).map((err, i) => (
+                        <div key={i}>行 {err.row}: {err.message}</div>
+                      ))}
+                      {importResult.errors.length > 5 && (
+                        <div>...还有 {importResult.errors.length - 5} 个错误</div>
+                      )}
+                    </div>
+                  )}
+                </div>
+              )}
+            </div>
+            <div className="modal-footer">
+              <div style={{ fontSize: '13px', color: 'var(--text-secondary)' }}>
+                导入到：
+                {importProjectId ? `项目: ${projects.find(p => p.id === importProjectId)?.name}` : '未选择'}
+                {importSuiteId ? ` > 套件: ${suites.find(s => s.id === importSuiteId)?.name}` : ''}
+                {importFolderId ? ` > 文件夹: ${folders.find(f => f.id === importFolderId)?.name}` : ''}
+              </div>
+              <div style={{ display: 'flex', gap: '8px' }}>
+                <button type="button" className="btn btn-secondary" onClick={closeImportModal}>关闭</button>
+                <button
+                  type="button"
+                  className="btn btn-primary"
+                  onClick={handleImport}
+                  disabled={!importFile || !importProjectId || importing}
+                >
+                  {importing ? '导入中...' : '开始导入'}
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
       )}
     </>
   )

@@ -84,7 +84,11 @@ export const testCasesApi = {
   update: (id: string, data: any) => api.put(`/test-cases/${id}`, data),
   delete: (id: string) => api.delete(`/test-cases/${id}`),
   move: (id: string, data: { projectId?: string; suiteId?: string; folderId?: string }) =>
-    api.patch(`/test-cases/${id}/move`, data)
+    api.patch(`/test-cases/${id}/move`, data),
+  importCsv: (formData: FormData) =>
+    api.post('/test-cases/import', formData, {
+      headers: { 'Content-Type': 'multipart/form-data' }
+    })
 }
 
 // Test Plans

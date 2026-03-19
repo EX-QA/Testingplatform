@@ -1,0 +1,192 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "sqlite"
+  url      = "file:./dev.db"
+}
+
+model Project {
+  id          String   @id @default(uuid())
+  name        String
+  description String?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+  creatorId   String
+  ownerId     String
+
+  members     ProjectMember[]
+  testSuites  TestSuite[]
+  testCases   TestCase[]
+}
+
+model ProjectMember {
+  id        String   @id @default(uuid())
+  userId    String
+  projectId String
+  role      String   @default("viewer")  // "owner" | "admin" | "editor" | "viewer"
+  createdAt DateTime @default(now())
+
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  project   Project  @relation(fields: [projectId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, projectId])
+}
+
+model TestSuite {
+  id          String   @id @default(uuid())
+  name        String
+  description String?
+  projectId   String
+  project     Project  @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+  creatorId   String
+
+  folders     Folder[]
+  testCases   TestCase[]
+}
+
+model Folder {
+  id          String   @id @default(uuid())
+  name        String
+  suiteId     String
+  suite       TestSuite @relation(fields: [suiteId], references: [id], onDelete: Cascade)
+  parentId    String?
+  parent      Folder?  @relation("FolderTree", fields: [parentId], references: [id])
+  children    Folder[] @relation("FolderTree")
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+  creatorId   String
+
+  testCases   TestCase[]
+}
+
+model TestCase {
+  id           String   @id @default(uuid())
+  title        String
+  module       String?
+  priority     String   @default("medium")
+  type         String   @default("functional")
+  precondition String?
+  steps        String
+  expectedResult String?
+  status       String   @default("draft")
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+  creatorId    String?
+  creatorName String?
+
+  projectId    String?
+  project      Project? @relation(fields: [projectId], references: [id], onDelete: SetNull)
+  suiteId      String?
+  suite        TestSuite? @relation(fields: [suiteId], references: [id], onDelete: SetNull)
+  folderId     String?
+  folder       Folder?  @relation(fields: [folderId], references: [id], onDelete: SetNull)
+
+  planItems    PlanItem[]
+}
+
+model TestPlan {
+  id          String   @id @default(uuid())
+  name        String
+  description String?
+  status      String   @default("draft")
+  startDate   DateTime?
+  endDate     DateTime?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  items       PlanItem[]
+  executions  PlanExecution[]
+}
+
+model PlanItem {
+  id          String   @id @default(uuid())
+  planId      String
+  caseId      String
+  plan        TestPlan @relation(fields: [planId], references: [id], onDelete: Cascade)
+  testCase    TestCase @relation(fields: [caseId], references: [id], onDelete: Cascade)
+  createdAt   DateTime @default(now())
+
+  @@unique([planId, caseId])
+}
+
+model PlanExecution {
+  id          String   @id @default(uuid())
+  planId      String
+  executor    String?
+  executedAt  DateTime @default(now())
+  result      String   @default("pending")
+  notes       String?
+  plan        TestPlan @relation(fields: [planId], references: [id], onDelete: Cascade)
+}
+
+model Defect {
+  id          String   @id @default(uuid())
+  title       String
+  description String?
+  severity    String   @default("normal")
+  priority    String   @default("medium")
+  status      String   @default("new")
+  assignee    String?
+  foundVersion String?
+  fixedVersion String?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+}
+
+model ApiTest {
+  id          String   @id @default(uuid())
+  name        String
+  url         String
+  method      String   @default("GET")
+  headers     String?
+  body        String?
+  status      String   @default("active")
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  history     ApiTestHistory[]
+}
+
+model ApiTestHistory {
+  id          String   @id @default(uuid())
+  testId      String
+  url         String
+  method      String
+  requestHeaders String?
+  requestBody String?
+  responseStatus Int?
+  responseHeaders String?
+  responseBody String?
+  responseTime Int?
+  executedAt  DateTime @default(now())
+  apiTest     ApiTest  @relation(fields: [testId], references: [id], onDelete: Cascade)
+}
+
+model AutomationScript {
+  id          String   @id @default(uuid())
+  name        String
+  description String?
+  scriptType  String   @default("python")
+  content     String
+  status      String   @default("enabled")
+  lastResult  String?
+  lastRunAt   DateTime?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+}
+
+model User {
+  id        String   @id @default(uuid())
+  username  String   @unique
+  email     String   @unique
+  password  String
+  role      String   @default("user")  // "admin" | "user"
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  projectMemberships ProjectMember[]
+}

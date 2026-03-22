@@ -1,7 +1,8 @@
 import { useState, useEffect } from 'react'
 import { BrowserRouter, Routes, Route, NavLink, Navigate } from 'react-router-dom'
-import { LayoutDashboard, FileText, Play, Bug, Globe, Zap, LogOut, User, Shield, Folder } from 'lucide-react'
+import { LayoutDashboard, FileText, Play, Bug, Globe, Zap, LogOut, User, Shield, LayoutList, AlertCircle } from 'lucide-react'
 import { projectsApi } from './services/api'
+import { ProjectProvider, useProject } from './contexts/ProjectContext'
 import TestCases from './pages/TestCases'
 import TestPlans from './pages/TestPlans'
 import Defects from './pages/Defects'
@@ -11,6 +12,7 @@ import Login from './pages/Login'
 import Register from './pages/Register'
 import Users from './pages/Users'
 import Projects from './pages/Projects'
+import ProjectSelector from './components/ProjectSelector'
 
 function getUser() {
   const userStr = localStorage.getItem('user')
@@ -51,24 +53,136 @@ function App() {
   const handleLogout = () => {
     localStorage.removeItem('user')
     localStorage.removeItem('token')
+    localStorage.removeItem('currentProjectId')
     setUser(null)
   }
 
   return (
-    <BrowserRouter>
-      <Routes>
-        <Route path="/login" element={<Login />} />
-        <Route path="/register" element={<Register />} />
-        <Route
-          path="/*"
-          element={user ? <AppLayout user={user} onLogout={handleLogout} /> : <Navigate to="/login" />}
-        />
-      </Routes>
-    </BrowserRouter>
+    <ProjectProvider>
+      <BrowserRouter>
+        <Routes>
+          <Route path="/login" element={<Login />} />
+          <Route path="/register" element={<Register />} />
+          <Route
+            path="/*"
+            element={user ? <AppLayout user={user} onLogout={handleLogout} /> : <Navigate to="/login" />}
+          />
+        </Routes>
+      </BrowserRouter>
+    </ProjectProvider>
   )
 }
 
 function AppLayout({ user, onLogout }: { user: any; onLogout: () => void }) {
+  const { hasProjects, isLoading } = useProject()
+
+  // Show loading state
+  if (isLoading) {
+    return (
+      <div className="app-layout">
+        <aside className="sidebar">
+          <div className="sidebar-header">
+            <h1>
+              <div className="logo-icon">
+                <Zap size={22} />
+              </div>
+              QAForge
+            </h1>
+          </div>
+        </aside>
+        <main className="main-content">
+          <div className="loading-container">
+            <div className="loading">加载中...</div>
+          </div>
+        </main>
+      </div>
+    )
+  }
+
+  // No projects - show empty state
+  if (!hasProjects) {
+    return (
+      <div className="app-layout">
+        <aside className="sidebar">
+          <div className="sidebar-header">
+            <h1>
+              <div className="logo-icon">
+                <Zap size={22} />
+              </div>
+              QAForge
+            </h1>
+          </div>
+
+          <nav className="sidebar-nav">
+            <div className="nav-item disabled">
+              <LayoutDashboard size={20} />
+              <span>概览</span>
+            </div>
+            <div className="nav-item disabled">
+              <FileText size={20} />
+              <span>测试用例</span>
+            </div>
+            <div className="nav-item disabled">
+              <Play size={20} />
+              <span>测试计划</span>
+            </div>
+            <div className="nav-item disabled">
+              <Bug size={20} />
+              <span>缺陷管理</span>
+            </div>
+            <div className="nav-item disabled">
+              <Globe size={20} />
+              <span>接口测试</span>
+            </div>
+            <div className="nav-item disabled">
+              <Zap size={20} />
+              <span>自动化测试</span>
+            </div>
+            {user?.role === 'admin' && (
+              <>
+                <NavLink to="/projects" className={({ isActive }) => `nav-item ${isActive ? 'active' : ''}`}>
+                  <LayoutList size={20} />
+                  <span>项目管理</span>
+                </NavLink>
+                <NavLink to="/users" className={({ isActive }) => `nav-item ${isActive ? 'active' : ''}`}>
+                  <Shield size={20} />
+                  <span>用户管理</span>
+                </NavLink>
+              </>
+            )}
+          </nav>
+          <div className="sidebar-footer">
+            <div className="user-profile">
+              <div className="user-avatar">
+                <User size={20} />
+              </div>
+              <div className="user-details">
+                <div className="user-name">{user?.username}</div>
+                <div className="user-email">{user?.email}</div>
+              </div>
+            </div>
+            <button className="logout-btn" onClick={onLogout}>
+              <LogOut size={18} />
+              <span>退出登录</span>
+            </button>
+          </div>
+        </aside>
+        <main className="main-content">
+          <div className="empty-state-container">
+            <div className="empty-state-card">
+              <div className="empty-state-icon">
+                <AlertCircle size={48} />
+              </div>
+              <h2>暂无可访问的项目</h2>
+              <p>您还没有被添加到任何项目中。</p>
+              <p>请联系管理员为您添加项目访问权限。</p>
+            </div>
+          </div>
+        </main>
+      </div>
+    )
+  }
+
   return (
     <div className="app-layout">
       <aside className="sidebar">
@@ -80,6 +194,10 @@ function AppLayout({ user, onLogout }: { user: any; onLogout: () => void }) {
             QAForge
           </h1>
         </div>
+
+        {/* Project Selector */}
+        <ProjectSelector />
+
         <nav className="sidebar-nav">
           <NavLink to="/" className={({ isActive }) => `nav-item ${isActive ? 'active' : ''}`} end>
             <LayoutDashboard size={20} />
@@ -108,7 +226,7 @@ function AppLayout({ user, onLogout }: { user: any; onLogout: () => void }) {
           {user?.role === 'admin' && (
             <>
               <NavLink to="/projects" className={({ isActive }) => `nav-item ${isActive ? 'active' : ''}`}>
-                <Folder size={20} />
+                <LayoutList size={20} />
                 <span>项目管理</span>
               </NavLink>
               <NavLink to="/users" className={({ isActive }) => `nav-item ${isActive ? 'active' : ''}`}>
@@ -152,11 +270,11 @@ function AppLayout({ user, onLogout }: { user: any; onLogout: () => void }) {
 }
 
 function Overview({ user }: { user: any }) {
+  const { currentProject } = useProject()
   const [stats, setStats] = useState<{ totalTestCases: number; projects: { id: string; name: string; testCaseCount: number }[] }>({
     totalTestCases: 0,
     projects: []
   })
-  const [selectedProjectId, setSelectedProjectId] = useState<string | null>(null)
   const [loading, setLoading] = useState(true)
 
   useEffect(() => {
@@ -168,8 +286,8 @@ function Overview({ user }: { user: any }) {
       .finally(() => setLoading(false))
   }, [])
 
-  const displayedCount = selectedProjectId
-    ? stats.projects.find(p => p.id === selectedProjectId)?.testCaseCount ?? 0
+  const displayedCount = currentProject
+    ? stats.projects.find(p => p.id === currentProject.id)?.testCaseCount ?? 0
     : stats.totalTestCases
 
   return (
@@ -185,17 +303,9 @@ function Overview({ user }: { user: any }) {
           <div className="stat-card">
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '8px' }}>
               <div className="stat-label">测试用例</div>
-              <select
-                value={selectedProjectId || ''}
-                onChange={e => setSelectedProjectId(e.target.value || null)}
-                className="form-select"
-                style={{ width: 'auto', padding: '4px 8px', fontSize: '12px' }}
-              >
-                <option value="">全部</option>
-                {stats.projects.map(p => (
-                  <option key={p.id} value={p.id}>{p.name}</option>
-                ))}
-              </select>
+              {currentProject && (
+                <span style={{ fontSize: '11px', color: 'var(--text-secondary)' }}>{currentProject.name}</span>
+              )}
             </div>
             <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
               <div className="stat-icon primary">
@@ -203,11 +313,6 @@ function Overview({ user }: { user: any }) {
               </div>
               <div className="stat-value">{loading ? '-' : displayedCount}</div>
             </div>
-            {selectedProjectId && (
-              <div style={{ fontSize: '11px', color: 'var(--text-secondary)', marginTop: '4px' }}>
-                {stats.projects.find(p => p.id === selectedProjectId)?.name}
-              </div>
-            )}
           </div>
           <div className="stat-card">
             <div className="stat-icon success">

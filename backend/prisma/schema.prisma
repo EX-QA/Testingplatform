@@ -16,9 +16,13 @@ model Project {
   creatorId   String
   ownerId     String
 
-  members     ProjectMember[]
-  testSuites  TestSuite[]
-  testCases   TestCase[]
+  members       ProjectMember[]
+  testSuites    TestSuite[]
+  testCases     TestCase[]
+  testPlans     TestPlan[]
+  defects       Defect[]
+  apiTests      ApiTest[]
+  automationScripts AutomationScript[]
 }
 
 model ProjectMember {
@@ -97,6 +101,9 @@ model TestPlan {
   createdAt   DateTime @default(now())
   updatedAt   DateTime @updatedAt
 
+  projectId   String?
+  project     Project? @relation(fields: [projectId], references: [id], onDelete: Cascade)
+
   items       PlanItem[]
   executions  PlanExecution[]
 }
@@ -134,6 +141,9 @@ model Defect {
   fixedVersion String?
   createdAt   DateTime @default(now())
   updatedAt   DateTime @updatedAt
+
+  projectId   String?
+  project     Project? @relation(fields: [projectId], references: [id], onDelete: Cascade)
 }
 
 model ApiTest {
@@ -146,6 +156,9 @@ model ApiTest {
   status      String   @default("active")
   createdAt   DateTime @default(now())
   updatedAt   DateTime @updatedAt
+
+  projectId   String?
+  project     Project? @relation(fields: [projectId], references: [id], onDelete: Cascade)
 
   history     ApiTestHistory[]
 }
@@ -176,6 +189,9 @@ model AutomationScript {
   lastRunAt   DateTime?
   createdAt   DateTime @default(now())
   updatedAt   DateTime @updatedAt
+
+  projectId   String?
+  project     Project? @relation(fields: [projectId], references: [id], onDelete: Cascade)
 }
 
 model User {

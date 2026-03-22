@@ -4,8 +4,29 @@ import prisma from '../prisma/index.js';
 import csv from 'csv-parser';
 import { Readable } from 'stream';
 import iconv from 'iconv-lite';
+import { authMiddleware, AuthRequest } from '../middleware/auth.js';
 
 const router = Router();
+
+// Helper to get user's accessible project IDs
+async function getUserProjectIds(userId: string, userRole: string): Promise<string[]> {
+  if (userRole === 'admin') {
+    const projects = await prisma.project.findMany({ select: { id: true } });
+    return projects.map(p => p.id);
+  }
+  const memberships = await prisma.projectMember.findMany({
+    where: { userId },
+    select: { projectId: true }
+  });
+  return memberships.map(m => m.projectId);
+}
+
+// Helper to check if user has access to a specific project
+async function hasProjectAccess(userId: string, userRole: string, projectId: string | null): Promise<boolean> {
+  if (!projectId) return false;
+  const userProjectIds = await getUserProjectIds(userId, userRole);
+  return userProjectIds.includes(projectId);
+}
 const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 5 * 1024 * 1024 } });
 
 // Detect encoding and decode buffer
@@ -307,12 +328,19 @@ router.post('/import', upload.single('file'), async (req, res) => {
   }
 });
 
-router.get('/', async (req, res) => {
+router.get('/', authMiddleware, async (req: AuthRequest, res) => {
   try {
     const { projectId, suiteId, folderId, priority, search } = req.query;
-    const where: any = {};
+    const userProjectIds = await getUserProjectIds(req.userId!, req.userRole!);
 
-    if (projectId) where.projectId = projectId;
+    // Filter by accessible projects (admin sees all, users see only their projects)
+    const where: any = {
+      projectId: { in: userProjectIds }
+    };
+
+    if (projectId && userProjectIds.includes(projectId as string)) {
+      where.projectId = projectId;
+    }
     if (suiteId) where.suiteId = suiteId;
     if (folderId) where.folderId = folderId;
     if (priority) where.priority = priority;
@@ -387,7 +415,7 @@ router.get('/', async (req, res) => {
  *       204:
  *         description: 删除成功
  */
-router.get('/:id', async (req, res) => {
+router.get('/:id', authMiddleware, async (req: AuthRequest, res) => {
   try {
     const testCase = await prisma.testCase.findUnique({
       where: { id: req.params.id },
@@ -400,6 +428,11 @@ router.get('/:id', async (req, res) => {
     if (!testCase) {
       return res.status(404).json({ error: 'Test case not found' });
     }
+    // Check project access
+    const userProjectIds = await getUserProjectIds(req.userId!, req.userRole!);
+    if (!testCase.projectId || !userProjectIds.includes(testCase.projectId)) {
+      return res.status(403).json({ error: '无权限访问此测试用例' });
+    }
     res.json(testCase);
   } catch (error) {
     console.error('Failed to fetch test case:', error);
@@ -407,9 +440,16 @@ router.get('/:id', async (req, res) => {
   }
 });
 
-router.post('/', async (req, res) => {
+router.post('/', authMiddleware, async (req: AuthRequest, res) => {
   try {
     const { title, module, priority, type, precondition, steps, expectedResult, projectId, suiteId, folderId, creatorId, creatorName } = req.body;
+    // Validate project access for non-admin users
+    if (projectId && req.userRole !== 'admin') {
+      const userProjectIds = await getUserProjectIds(req.userId!, req.userRole!);
+      if (!userProjectIds.includes(projectId)) {
+        return res.status(403).json({ error: '无权限在此项目中创建测试用例' });
+      }
+    }
     const testCase = await prisma.testCase.create({
       data: {
         title,
@@ -422,8 +462,8 @@ router.post('/', async (req, res) => {
         projectId,
         suiteId,
         folderId,
-        creatorId,
-        creatorName
+        creatorId: creatorId || req.userId,
+        creatorName: creatorName || req.username
       }
     });
     res.status(201).json(testCase);
@@ -433,9 +473,18 @@ router.post('/', async (req, res) => {
   }
 });
 
-router.put('/:id', async (req, res) => {
+router.put('/:id', authMiddleware, async (req: AuthRequest, res) => {
   try {
     const { title, module, priority, type, precondition, steps, expectedResult } = req.body;
+    // Check ownership
+    const existing = await prisma.testCase.findUnique({ where: { id: req.params.id } });
+    if (!existing) {
+      return res.status(404).json({ error: 'Test case not found' });
+    }
+    const userProjectIds = await getUserProjectIds(req.userId!, req.userRole!);
+    if (!existing.projectId || !userProjectIds.includes(existing.projectId)) {
+      return res.status(403).json({ error: '无权限修改此测试用例' });
+    }
     const testCase = await prisma.testCase.update({
       where: { id: req.params.id },
       data: {
@@ -488,9 +537,16 @@ router.put('/:id', async (req, res) => {
  *         description: 移动成功
  */
 // 移动测试用例到指定节点
-router.patch('/:id/move', async (req, res) => {
+router.patch('/:id/move', authMiddleware, async (req: AuthRequest, res) => {
   try {
     const { projectId, suiteId, folderId } = req.body;
+    // Check access to target project
+    if (projectId && req.userRole !== 'admin') {
+      const userProjectIds = await getUserProjectIds(req.userId!, req.userRole!);
+      if (!userProjectIds.includes(projectId)) {
+        return res.status(403).json({ error: '无权限移动到此项目' });
+      }
+    }
     const testCase = await prisma.testCase.update({
       where: { id: req.params.id },
       data: {
@@ -506,8 +562,17 @@ router.patch('/:id/move', async (req, res) => {
   }
 });
 
-router.delete('/:id', async (req, res) => {
+router.delete('/:id', authMiddleware, async (req: AuthRequest, res) => {
   try {
+    // Check ownership
+    const existing = await prisma.testCase.findUnique({ where: { id: req.params.id } });
+    if (!existing) {
+      return res.status(404).json({ error: 'Test case not found' });
+    }
+    const userProjectIds = await getUserProjectIds(req.userId!, req.userRole!);
+    if (!existing.projectId || !userProjectIds.includes(existing.projectId)) {
+      return res.status(403).json({ error: '无权限删除此测试用例' });
+    }
     await prisma.testCase.delete({
       where: { id: req.params.id }
     });
@@ -544,11 +609,21 @@ router.delete('/:id', async (req, res) => {
  *       500:
  *         description: 删除失败
  */
-router.post('/batch-delete', async (req, res) => {
+router.post('/batch-delete', authMiddleware, async (req: AuthRequest, res) => {
   try {
     const { ids } = req.body;
     if (!Array.isArray(ids) || ids.length === 0) {
       return res.status(400).json({ error: 'ids must be a non-empty array' });
+    }
+    // Verify user has access to all test cases being deleted
+    const testCases = await prisma.testCase.findMany({
+      where: { id: { in: ids } },
+      select: { projectId: true }
+    });
+    const userProjectIds = await getUserProjectIds(req.userId!, req.userRole!);
+    const unauthorized = testCases.filter(tc => tc.projectId && !userProjectIds.includes(tc.projectId));
+    if (unauthorized.length > 0 && req.userRole !== 'admin') {
+      return res.status(403).json({ error: '无权限删除部分测试用例' });
     }
     const result = await prisma.testCase.deleteMany({
       where: { id: { in: ids } }

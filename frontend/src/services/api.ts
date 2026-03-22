@@ -96,7 +96,7 @@ export const testCasesApi = {
 
 // Test Plans
 export const testPlansApi = {
-  getAll: (params?: { status?: string }) => api.get('/test-plans', { params }),
+  getAll: (params?: { projectId?: string; status?: string }) => api.get('/test-plans', { params }),
   getById: (id: string) => api.get(`/test-plans/${id}`),
   create: (data: any) => api.post('/test-plans', data),
   update: (id: string, data: any) => api.put(`/test-plans/${id}`, data),
@@ -107,7 +107,7 @@ export const testPlansApi = {
 
 // Defects
 export const defectsApi = {
-  getAll: (params?: { status?: string; severity?: string; priority?: string }) =>
+  getAll: (params?: { projectId?: string; status?: string; severity?: string; priority?: string }) =>
     api.get('/defects', { params }),
   getById: (id: string) => api.get(`/defects/${id}`),
   create: (data: any) => api.post('/defects', data),
@@ -119,7 +119,7 @@ export const defectsApi = {
 export const apiTestsApi = {
   execute: (data: { url: string; method: string; headers?: string; body?: string }) =>
     api.post('/api-tests/execute', data),
-  getAll: () => api.get('/api-tests'),
+  getAll: (params?: { projectId?: string }) => api.get('/api-tests', { params }),
   save: (data: any) => api.post('/api-tests/save', data),
   update: (id: string, data: any) => api.put(`/api-tests/${id}`, data),
   delete: (id: string) => api.delete(`/api-tests/${id}`),
@@ -128,7 +128,7 @@ export const apiTestsApi = {
 
 // Automation
 export const automationApi = {
-  getAll: (params?: { status?: string }) => api.get('/automation', { params }),
+  getAll: (params?: { projectId?: string; status?: string }) => api.get('/automation', { params }),
   getById: (id: string) => api.get(`/automation/${id}`),
   create: (data: any) => api.post('/automation', data),
   update: (id: string, data: any) => api.put(`/automation/${id}`, data),

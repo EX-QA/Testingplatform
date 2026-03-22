@@ -1,9 +1,10 @@
 import { useState, useEffect, useRef } from 'react'
-import { Plus, Search, Edit, Trash2, X, ChevronRight, ChevronDown, Package, FolderOpen, Upload, CheckCircle, XCircle, Download } from 'lucide-react'
+import { Plus, Search, Edit, Trash2, X, ChevronRight, ChevronDown, ChevronLeft, FolderOpen, Upload, CheckCircle, XCircle, Download } from 'lucide-react'
 import { DndContext, DragOverlay, closestCenter, PointerSensor, useSensor, useSensors, useDroppable } from '@dnd-kit/core'
 import { SortableContext, verticalListSortingStrategy, useSortable } from '@dnd-kit/sortable'
 import { CSS } from '@dnd-kit/utilities'
-import { testCasesApi, projectsApi, testSuitesApi, foldersApi } from '../services/api'
+import { testCasesApi, testSuitesApi, foldersApi } from '../services/api'
+import { useProject } from '../contexts/ProjectContext'
 import ConfirmDialog from '../components/ConfirmDialog'
 import TruncatedCell from '../components/TruncatedCell'
 
@@ -23,12 +24,6 @@ interface TestCase {
   projectId?: string | null
   suiteId?: string | null
   folderId?: string | null
-}
-
-interface Project {
-  id: string
-  name: string
-  description: string | null
 }
 
 interface TestSuite {
@@ -150,28 +145,98 @@ function DragOverlayItem({ testCase }: { testCase: TestCase }) {
   )
 }
 
+// 递归渲染文件夹树
+function FolderTreeItem({
+  folder,
+  depth,
+  expandedFolders,
+  selectedFolder,
+  onToggleFolder,
+  onSelectFolder,
+  onAddSubFolder,
+  onDeleteFolder,
+  getChildFolders
+}: {
+  folder: Folder
+  depth: number
+  expandedFolders: Set<string>
+  selectedFolder: string | null
+  onToggleFolder: (id: string) => void
+  onSelectFolder: (id: string) => void
+  onAddSubFolder: (id: string) => void
+  onDeleteFolder: (id: string, name: string) => void
+  getChildFolders: (parentId: string) => Folder[]
+}) {
+  const children = getChildFolders(folder.id)
+  const hasChildren = children.length > 0
+  const isExpanded = expandedFolders.has(folder.id)
+
+  return (
+    <div style={{ paddingLeft: depth === 0 ? '0' : '24px' }}>
+      <DroppableTreeItem
+        id={`folder-${folder.id}`}
+        className={`tree-item ${selectedFolder === folder.id ? 'selected' : ''}`}
+        onClick={() => onSelectFolder(folder.id)}
+      >
+        <span onClick={(e) => { e.stopPropagation(); onToggleFolder(folder.id) }}>
+          {hasChildren ? (isExpanded ? <ChevronDown size={16} /> : <ChevronRight size={16} />) : <span style={{ width: '16px' }} />}
+        </span>
+        <FolderOpen size={16} />
+        <span style={{ flex: 1 }}>{folder.name}</span>
+        <button
+          className="tree-action"
+          onClick={(e) => { e.stopPropagation(); onAddSubFolder(folder.id) }}
+          title="添加子文件夹"
+        >
+          <Plus size={14} />
+        </button>
+        <button
+          className="tree-action"
+          onClick={(e) => { e.stopPropagation(); onDeleteFolder(folder.id, folder.name) }}
+          title="删除文件夹"
+        >
+          <X size={14} />
+        </button>
+      </DroppableTreeItem>
+
+      {/* 递归渲染子文件夹 */}
+      {hasChildren && isExpanded && children.map(childFolder => (
+        <FolderTreeItem
+          key={childFolder.id}
+          folder={childFolder}
+          depth={depth + 1}
+          expandedFolders={expandedFolders}
+          selectedFolder={selectedFolder}
+          onToggleFolder={onToggleFolder}
+          onSelectFolder={onSelectFolder}
+          onAddSubFolder={onAddSubFolder}
+          onDeleteFolder={onDeleteFolder}
+          getChildFolders={getChildFolders}
+        />
+      ))}
+    </div>
+  )
+}
+
 export default function TestCases() {
-  const [projects, setProjects] = useState<Project[]>([])
+  const { currentProject } = useProject()
   const [suites, setSuites] = useState<TestSuite[]>([])
   const [folders, setFolders] = useState<Folder[]>([])
   const [cases, setCases] = useState<TestCase[]>([])
   const [loading, setLoading] = useState(true)
 
   // 树形展开状态
-  const [expandedProjects, setExpandedProjects] = useState<Set<string>>(new Set())
-  const [expandedSuites, setExpandedSuites] = useState<Set<string>>(new Set())
   const [expandedFolders, setExpandedFolders] = useState<Set<string>>(new Set())
 
   // 选中状态
-  const [selectedProject, setSelectedProject] = useState<string | null>(null)
   const [selectedSuite, setSelectedSuite] = useState<string | null>(null)
   const [selectedFolder, setSelectedFolder] = useState<string | null>(null)
 
   // 弹窗状态
   const [showModal, setShowModal] = useState(false)
-  const [showProjectModal, setShowProjectModal] = useState(false)
   const [showSuiteModal, setShowSuiteModal] = useState(false)
   const [showFolderModal, setShowFolderModal] = useState(false)
+  const [parentFolderId, setParentFolderId] = useState<string | null>(null)
   const [editingCase, setEditingCase] = useState<TestCase | null>(null)
 
   // 搜索
@@ -181,7 +246,7 @@ export default function TestCases() {
   const [activeId, setActiveId] = useState<string | null>(null)
 
   // 删除状态
-  const [deleteTarget, setDeleteTarget] = useState<{ type: 'project' | 'suite' | 'folder'; id: string; name: string } | null>(null)
+  const [deleteTarget, setDeleteTarget] = useState<{ type: 'suite' | 'folder'; id: string; name: string } | null>(null)
   const [deleteCaseId, setDeleteCaseId] = useState<string | null>(null)
 
   // 批量选择状态
@@ -194,10 +259,19 @@ export default function TestCases() {
   const [importResult, setImportResult] = useState<{ success: boolean; total: number; imported: number; failed: number; errors: { row: number; message: string }[] } | null>(null)
   const [importing, setImporting] = useState(false)
   const [previewData, setPreviewData] = useState<string[][]>([])
-  const [importProjectId, setImportProjectId] = useState<string>('')
   const [importSuiteId, setImportSuiteId] = useState<string>('')
   const [importFolderId, setImportFolderId] = useState<string>('')
   const importResultRef = useRef<HTMLDivElement>(null)
+
+  // Reset import state when modal opens with new project
+  useEffect(() => {
+    if (showImportModal) {
+      setImportSuiteId('')
+      setImportFolderId('')
+      setImportFile(null)
+      setImportResult(null)
+    }
+  }, [showImportModal, currentProject])
 
   const user = getUser()
 
@@ -217,13 +291,11 @@ export default function TestCases() {
   const fetchAllData = async () => {
     setLoading(true)
     try {
-      const [projectsRes, suitesRes, foldersRes, casesRes] = await Promise.all([
-        projectsApi.getAll(),
+      const [suitesRes, foldersRes, casesRes] = await Promise.all([
         testSuitesApi.getAll({}),
         foldersApi.getAll({}),
         testCasesApi.getAll({})
       ])
-      setProjects(projectsRes.data)
       setSuites(suitesRes.data)
       setFolders(foldersRes.data)
       setCases(casesRes.data)
@@ -232,26 +304,6 @@ export default function TestCases() {
     } finally {
       setLoading(false)
     }
-  }
-
-  const toggleProject = (projectId: string) => {
-    const newExpanded = new Set(expandedProjects)
-    if (newExpanded.has(projectId)) {
-      newExpanded.delete(projectId)
-    } else {
-      newExpanded.add(projectId)
-    }
-    setExpandedProjects(newExpanded)
-  }
-
-  const toggleSuite = (suiteId: string) => {
-    const newExpanded = new Set(expandedSuites)
-    if (newExpanded.has(suiteId)) {
-      newExpanded.delete(suiteId)
-    } else {
-      newExpanded.add(suiteId)
-    }
-    setExpandedSuites(newExpanded)
   }
 
   const toggleFolder = (folderId: string) => {
@@ -264,31 +316,14 @@ export default function TestCases() {
     setExpandedFolders(newExpanded)
   }
 
-  // 获取某个项目下的测试套件
-  const getSuitesForProject = (projectId: string) => suites.filter(s => s.projectId === projectId)
+  // 获取当前项目下的测试套件
+  const getSuitesForCurrentProject = () => suites.filter(s => s.projectId === currentProject?.id)
 
   // 获取某个测试套件下的文件夹
   const getFoldersForSuite = (suiteId: string) => folders.filter(f => f.suiteId === suiteId && !f.parentId)
 
   // 获取某个文件夹下的子文件夹
   const getChildFolders = (parentId: string) => folders.filter(f => f.parentId === parentId)
-
-  // 创建项目
-  const handleCreateProject = async (e: React.FormEvent<HTMLFormElement>) => {
-    e.preventDefault()
-    const formData = new FormData(e.currentTarget)
-    try {
-      await projectsApi.create({
-        name: formData.get('name'),
-        description: formData.get('description'),
-        creatorId: user?.id
-      })
-      fetchAllData()
-      setShowProjectModal(false)
-    } catch (error) {
-      console.error('Failed to create project:', error)
-    }
-  }
 
   // 创建测试套件
   const handleCreateSuite = async (e: React.FormEvent<HTMLFormElement>) => {
@@ -298,7 +333,7 @@ export default function TestCases() {
       await testSuitesApi.create({
         name: formData.get('name'),
         description: formData.get('description'),
-        projectId: selectedProject,
+        projectId: currentProject?.id,
         creatorId: user?.id
       })
       fetchAllData()
@@ -316,11 +351,12 @@ export default function TestCases() {
       await foldersApi.create({
         name: formData.get('name'),
         suiteId: selectedSuite,
-        parentId: selectedFolder || null,
+        parentId: parentFolderId,
         creatorId: user?.id
       })
       fetchAllData()
       setShowFolderModal(false)
+      setParentFolderId(null)
     } catch (error) {
       console.error('Failed to create folder:', error)
     }
@@ -339,7 +375,7 @@ export default function TestCases() {
       precondition: formData.get('precondition'),
       steps: formData.get('steps'),
       expectedResult: formData.get('expectedResult'),
-      projectId: selectedProject,
+      projectId: currentProject?.id,
       suiteId: selectedSuite,
       folderId: selectedFolder,
       creatorId: user?.id,
@@ -496,13 +532,13 @@ export default function TestCases() {
 
   // 执行导入
   const handleImport = async () => {
-    if (!importFile) return
+    if (!importFile || !currentProject) return
     setImporting(true)
     setImportResult(null)
 
     const formData = new FormData()
     formData.append('file', importFile)
-    if (importProjectId) formData.append('projectId', importProjectId)
+    if (currentProject?.id) formData.append('projectId', currentProject.id)
     if (importSuiteId) formData.append('suiteId', importSuiteId)
     if (importFolderId) formData.append('folderId', importFolderId)
     if (user?.id) formData.append('creatorId', user.id)
@@ -556,7 +592,6 @@ export default function TestCases() {
     setImportFile(null)
     setImportResult(null)
     setPreviewData([])
-    setImportProjectId('')
     setImportSuiteId('')
     setImportFolderId('')
   }
@@ -564,9 +599,7 @@ export default function TestCases() {
   const handleDeleteEntity = async () => {
     if (!deleteTarget) return
     try {
-      if (deleteTarget.type === 'project') {
-        await projectsApi.delete(deleteTarget.id)
-      } else if (deleteTarget.type === 'suite') {
+      if (deleteTarget.type === 'suite') {
         await testSuitesApi.delete(deleteTarget.id)
       } else if (deleteTarget.type === 'folder') {
         await foldersApi.delete(deleteTarget.id)
@@ -580,19 +613,15 @@ export default function TestCases() {
 
   // 获取当前选中的用例
   const getSelectedCases = () => {
-    let filtered = cases
+    if (!currentProject) return []
+    if (!selectedSuite) return []  // 必须先选择测试套件
+    let filtered = cases.filter(c => c.projectId === currentProject.id)
     if (selectedFolder) {
       // 选中文件夹 - 只显示该文件夹下的用例
       filtered = filtered.filter(c => c.folderId === selectedFolder)
     } else if (selectedSuite) {
       // 选中测试套件 - 显示该套件下（无文件夹）的用例
       filtered = filtered.filter(c => c.suiteId === selectedSuite && !c.folderId)
-    } else if (selectedProject) {
-      // 选中项目 - 显示该项目下（无测试套件）的用例
-      filtered = filtered.filter(c => c.projectId === selectedProject && !c.suiteId)
-    } else {
-      // 全部项目 - 只显示没有归属任何项目的用例（根级用例）
-      filtered = filtered.filter(c => !c.projectId && !c.suiteId && !c.folderId)
     }
     if (search) {
       filtered = filtered.filter(c =>
@@ -713,7 +742,15 @@ export default function TestCases() {
             >
               <Upload size={18} />导入
             </button>
-            {selectedProject && (
+            {!selectedSuite && currentProject && (
+              <button
+                className="btn btn-primary"
+                onClick={() => setShowSuiteModal(true)}
+              >
+                <Plus size={18} />创建测试套件
+              </button>
+            )}
+            {selectedSuite && (
               <button
                 className="btn btn-primary"
                 onClick={() => { setEditingCase(null); setShowModal(true) }}
@@ -728,147 +765,103 @@ export default function TestCases() {
           <div style={{ display: 'flex', gap: '20px' }}>
             {/* 左侧树形结构 - 可作为拖放目标 */}
             <div className="card" style={{ width: '320px', flexShrink: 0, maxHeight: 'calc(100vh - 180px)', overflow: 'auto' }}>
-              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '16px' }}>
-                <h3 style={{ fontSize: '14px', fontWeight: 600 }}>项目结构</h3>
-                {user?.role === 'admin' && (
-                  <button className="btn btn-secondary btn-sm" onClick={() => setShowProjectModal(true)}>
-                    <Plus size={14} />
-                  </button>
-                )}
-              </div>
-
-              {loading ? (
+              {!currentProject ? (
+                <div className="empty-state">
+                  <FolderOpen size={48} style={{ opacity: 0.3, marginBottom: '12px' }} />
+                  <h3 style={{ fontSize: '14px', color: 'var(--text-secondary)', marginBottom: '8px' }}>请先选择项目</h3>
+                  <p style={{ fontSize: '13px', color: 'var(--text-secondary)' }}>从左侧边栏选择项目以查看测试套件</p>
+                </div>
+              ) : loading ? (
                 <div style={{ padding: '20px', textAlign: 'center', color: 'var(--text-secondary)' }}>加载中...</div>
               ) : (
                 <div className="tree-view">
-                  {/* 全部项目 - 根级用例的放置目标 */}
-                  <DroppableTreeItem
-                    id="all-projects"
-                    className={`tree-item ${!selectedProject && !selectedSuite && !selectedFolder ? 'selected' : ''}`}
-                    onClick={() => { setSelectedProject(null); setSelectedSuite(null); setSelectedFolder(null) }}
-                  >
-                    <span style={{ width: '16px' }} />
-                    <Package size={16} />
-                    <span style={{ flex: 1 }}>全部项目</span>
-                  </DroppableTreeItem>
-
-                  {projects.map(project => (
-                    <div key={project.id}>
-                      {/* 项目层级 - 可放置 */}
-                      <DroppableTreeItem
-                        id={`project-${project.id}`}
-                        className={`tree-item ${selectedProject === project.id ? 'selected' : ''}`}
-                        onClick={() => { setSelectedProject(project.id); setSelectedSuite(null); setSelectedFolder(null) }}
+                  {/* 选中的测试套件信息 */}
+                  {selectedSuite && (
+                    <div className="selected-suite-header">
+                      <button
+                        onClick={() => { setSelectedSuite(null); setSelectedFolder(null) }}
+                        style={{
+                          display: 'flex',
+                          alignItems: 'center',
+                          gap: '4px',
+                          background: 'none',
+                          border: 'none',
+                          padding: '4px 8px',
+                          cursor: 'pointer',
+                          color: 'var(--text-secondary)',
+                          fontSize: '13px',
+                          borderRadius: '4px',
+                          marginBottom: '4px'
+                        }}
+                        onMouseEnter={(e) => { e.currentTarget.style.color = 'var(--primary)'; e.currentTarget.style.background = 'var(--bg-hover)' }}
+                        onMouseLeave={(e) => { e.currentTarget.style.color = 'var(--text-secondary)'; e.currentTarget.style.background = 'none' }}
                       >
-                        <span onClick={(e) => { e.stopPropagation(); toggleProject(project.id) }}>
-                          {expandedProjects.has(project.id) ? <ChevronDown size={16} /> : <ChevronRight size={16} />}
-                        </span>
-                        <Package size={16} />
-                        <span style={{ flex: 1 }}>{project.name}</span>
-                        <button
-                          className="tree-action"
-                          onClick={(e) => { e.stopPropagation(); setSelectedProject(project.id); setShowSuiteModal(true) }}
-                          title="添加测试套件"
-                        >
-                          <Plus size={14} />
-                        </button>
-                        <button
-                          className="tree-action"
-                          onClick={(e) => { e.stopPropagation(); setDeleteTarget({ type: 'project', id: project.id, name: project.name }) }}
-                          title="删除项目"
-                        >
-                          <X size={14} />
-                        </button>
-                      </DroppableTreeItem>
+                        <ChevronLeft size={16} />
+                        返回
+                      </button>
+                      <span style={{ fontSize: '12px', color: 'var(--text-secondary)' }}>当前测试套件:</span>
+                      <span style={{ fontSize: '14px', fontWeight: 500 }}>{suites.find(s => s.id === selectedSuite)?.name}</span>
+                    </div>
+                  )}
 
-                      {/* 测试套件层级 - 可放置 */}
-                      {expandedProjects.has(project.id) && getSuitesForProject(project.id).map(suite => (
-                        <div key={suite.id} style={{ paddingLeft: '24px' }}>
-                          <DroppableTreeItem
-                            id={`suite-${suite.id}`}
-                            className={`tree-item ${selectedSuite === suite.id && !selectedFolder ? 'selected' : ''}`}
-                            onClick={() => { setSelectedProject(project.id); setSelectedSuite(suite.id); setSelectedFolder(null) }}
-                          >
-                            <span onClick={(e) => { e.stopPropagation(); toggleSuite(suite.id) }}>
-                              {expandedSuites.has(suite.id) ? <ChevronDown size={16} /> : <ChevronRight size={16} />}
-                            </span>
-                            <FolderOpen size={16} />
-                            <span style={{ flex: 1 }}>{suite.name}</span>
+                  {/* 测试套件列表 */}
+                  {getSuitesForCurrentProject().length === 0 ? (
+                    <div className="empty-state">
+                      <FolderOpen size={48} style={{ opacity: 0.3, marginBottom: '12px' }} />
+                      <h3 style={{ fontSize: '14px', color: 'var(--text-secondary)', marginBottom: '8px' }}>暂无测试套件</h3>
+                      <button
+                        className="btn btn-primary btn-sm"
+                        onClick={() => setShowSuiteModal(true)}
+                        style={{ marginTop: '8px' }}
+                      >
+                        <Plus size={14} /> 添加测试套件
+                      </button>
+                    </div>
+                  ) : (
+                    getSuitesForCurrentProject().map(suite => (
+                      <div key={suite.id}>
+                        {/* 测试套件层级 */}
+                        <DroppableTreeItem
+                          id={`suite-${suite.id}`}
+                          className={`tree-item ${selectedSuite === suite.id ? 'selected' : ''}`}
+                          onClick={() => { setSelectedSuite(suite.id); setSelectedFolder(null) }}
+                        >
+                          <FolderOpen size={16} />
+                          <span style={{ flex: 1 }}>{suite.name}</span>
+                          {selectedSuite === suite.id && (
                             <button
                               className="tree-action"
-                              onClick={(e) => { e.stopPropagation(); setSelectedSuite(suite.id); setShowFolderModal(true) }}
+                              onClick={(e) => { e.stopPropagation(); setShowFolderModal(true) }}
                               title="添加文件夹"
                             >
                               <Plus size={14} />
                             </button>
-                            <button
-                              className="tree-action"
-                              onClick={(e) => { e.stopPropagation(); setDeleteTarget({ type: 'suite', id: suite.id, name: suite.name }) }}
-                              title="删除测试套件"
-                            >
-                              <X size={14} />
-                            </button>
-                          </DroppableTreeItem>
+                          )}
+                        </DroppableTreeItem>
 
-                          {/* 文件夹层级 - 可放置 */}
-                          {expandedSuites.has(suite.id) && getFoldersForSuite(suite.id).map(folder => (
-                            <div key={folder.id} style={{ paddingLeft: '24px' }}>
-                              <DroppableTreeItem
-                                id={`folder-${folder.id}`}
-                                className={`tree-item ${selectedFolder === folder.id ? 'selected' : ''}`}
-                                onClick={() => { setSelectedFolder(folder.id); setSelectedSuite(suite.id); setSelectedProject(project.id) }}
-                              >
-                                <span onClick={(e) => { e.stopPropagation(); toggleFolder(folder.id) }}>
-                                  {expandedFolders.has(folder.id) ? <ChevronDown size={16} /> : <ChevronRight size={16} />}
-                                </span>
-                                <FolderOpen size={16} />
-                                <span style={{ flex: 1 }}>{folder.name}</span>
-                                <button
-                                  className="tree-action"
-                                  onClick={(e) => { e.stopPropagation(); setDeleteTarget({ type: 'folder', id: folder.id, name: folder.name }) }}
-                                  title="删除文件夹"
-                                >
-                                  <X size={14} />
-                                </button>
-                              </DroppableTreeItem>
+                        {/* 文件夹层级 - 仅在选中此套件时显示 */}
+                        {selectedSuite === suite.id && getFoldersForSuite(suite.id).map(folder => (
+                          <FolderTreeItem
+                            key={folder.id}
+                            folder={folder}
+                            depth={0}
+                            expandedFolders={expandedFolders}
+                            selectedFolder={selectedFolder}
+                            onToggleFolder={toggleFolder}
+                            onSelectFolder={setSelectedFolder}
+                            onAddSubFolder={(id) => { setSelectedFolder(id); setParentFolderId(id); setShowFolderModal(true) }}
+                            onDeleteFolder={(id, name) => setDeleteTarget({ type: 'folder', id, name })}
+                            getChildFolders={getChildFolders}
+                          />
+                        ))}
+                      </div>
+                    ))
+                  )}
 
-                              {/* 子文件夹 */}
-                              {expandedFolders.has(folder.id) && getChildFolders(folder.id).map(childFolder => (
-                                <div key={childFolder.id} style={{ paddingLeft: '24px' }}>
-                                  <DroppableTreeItem
-                                    id={`folder-${childFolder.id}`}
-                                    className={`tree-item ${selectedFolder === childFolder.id ? 'selected' : ''}`}
-                                    onClick={() => { setSelectedFolder(childFolder.id); setSelectedSuite(folder.suiteId); setSelectedProject(project.id) }}
-                                  >
-                                    <span style={{ width: '16px' }} />
-                                    <FolderOpen size={16} />
-                                    <span style={{ flex: 1 }}>{childFolder.name}</span>
-                                    <button
-                                      className="tree-action"
-                                      onClick={(e) => { e.stopPropagation(); setDeleteTarget({ type: 'folder', id: childFolder.id, name: childFolder.name }) }}
-                                      title="删除文件夹"
-                                    >
-                                      <X size={14} />
-                                    </button>
-                                  </DroppableTreeItem>
-                                </div>
-                              ))}
-                            </div>
-                          ))}
-                        </div>
-                      ))}
-                    </div>
-                  ))}
-
-                  {projects.length === 0 && (
-                    <div className="empty-state">
-                      <FolderOpen size={48} style={{ opacity: 0.3, marginBottom: '12px' }} />
-                      <h3 style={{ fontSize: '14px', color: 'var(--text-secondary)', marginBottom: '8px' }}>暂无项目</h3>
-                      {user?.role === 'admin' ? (
-                        <p style={{ fontSize: '13px', color: 'var(--text-secondary)' }}>点击上方 <strong>+</strong> 按钮创建首个项目</p>
-                      ) : (
-                        <p style={{ fontSize: '13px', color: 'var(--text-secondary)' }}>您还没有项目，请联系管理员添加</p>
-                      )}
+                  {/* 未选中测试套件时的提示 */}
+                  {getSuitesForCurrentProject().length > 0 && !selectedSuite && (
+                    <div className="empty-state" style={{ padding: '20px' }}>
+                      <p style={{ fontSize: '13px', color: 'var(--text-secondary)' }}>请点击选择一个测试套件以查看文件夹</p>
                     </div>
                   )}
                 </div>
@@ -898,10 +891,12 @@ export default function TestCases() {
                 <div className="empty-state">加载中...</div>
               ) : displayCases.length === 0 ? (
                 <div className="empty-state">
-                  {selectedProject ? (
-                    <p>暂无测试用例，请点击右上角的「新建用例」按钮添加</p>
+                  {!currentProject ? (
+                    <p>请从左侧边栏选择项目以查看测试用例</p>
+                  ) : !selectedSuite ? (
+                    <p>请先选择一个测试套件</p>
                   ) : (
-                    <p>请在左侧选择一个项目以查看测试用例</p>
+                    <p>暂无测试用例，请点击右上角的「新建用例」按钮添加</p>
                   )}
                 </div>
               ) : (
@@ -1022,36 +1017,6 @@ export default function TestCases() {
         </div>
       )}
 
-      {/* 新建项目弹窗 */}
-      {showProjectModal && (
-        <div className="modal-overlay" onClick={() => setShowProjectModal(false)}>
-          <div className="modal" onClick={e => e.stopPropagation()} style={{ maxWidth: '480px' }}>
-            <div className="modal-header">
-              <h3>新建项目</h3>
-              <button className="btn btn-secondary btn-sm" onClick={() => setShowProjectModal(false)}>
-                <X size={18} />
-              </button>
-            </div>
-            <form onSubmit={handleCreateProject}>
-              <div className="modal-body">
-                <div className="form-group">
-                  <label className="form-label">项目名称 *</label>
-                  <input name="name" className="form-input" required placeholder="请输入项目名称" />
-                </div>
-                <div className="form-group">
-                  <label className="form-label">描述</label>
-                  <textarea name="description" className="form-textarea" placeholder="请输入项目描述" />
-                </div>
-              </div>
-              <div className="modal-footer">
-                <button type="button" className="btn btn-secondary" onClick={() => setShowProjectModal(false)}>取消</button>
-                <button type="submit" className="btn btn-primary">创建</button>
-              </div>
-            </form>
-          </div>
-        </div>
-      )}
-
       {/* 新建测试套件弹窗 */}
       {showSuiteModal && (
         <div className="modal-overlay" onClick={() => setShowSuiteModal(false)}>
@@ -1084,11 +1049,11 @@ export default function TestCases() {
 
       {/* 新建文件夹弹窗 */}
       {showFolderModal && (
-        <div className="modal-overlay" onClick={() => setShowFolderModal(false)}>
+        <div className="modal-overlay" onClick={() => { setShowFolderModal(false); setParentFolderId(null) }}>
           <div className="modal" onClick={e => e.stopPropagation()} style={{ maxWidth: '480px' }}>
             <div className="modal-header">
-              <h3>新建文件夹</h3>
-              <button className="btn btn-secondary btn-sm" onClick={() => setShowFolderModal(false)}>
+              <h3>{parentFolderId ? '新建子文件夹' : '新建文件夹'}</h3>
+              <button className="btn btn-secondary btn-sm" onClick={() => { setShowFolderModal(false); setParentFolderId(null) }}>
                 <X size={18} />
               </button>
             </div>
@@ -1100,7 +1065,7 @@ export default function TestCases() {
                 </div>
               </div>
               <div className="modal-footer">
-                <button type="button" className="btn btn-secondary" onClick={() => setShowFolderModal(false)}>取消</button>
+                <button type="button" className="btn btn-secondary" onClick={() => { setShowFolderModal(false); setParentFolderId(null) }}>取消</button>
                 <button type="submit" className="btn btn-primary">创建</button>
               </div>
             </form>
@@ -1119,7 +1084,7 @@ export default function TestCases() {
               </button>
             </div>
             <div className="modal-body">
-              <p>确定要删除{deleteTarget.type === 'project' ? '项目' : deleteTarget.type === 'suite' ? '测试套件' : '文件夹'}"{deleteTarget.name}"吗？</p>
+              <p>确定要删除{deleteTarget.type === 'suite' ? '测试套件' : '文件夹'}"{deleteTarget.name}"吗？</p>
               <p style={{ color: 'var(--text-secondary)', fontSize: '13px', marginTop: '8px' }}>此操作不可恢复</p>
             </div>
             <div className="modal-footer">
@@ -1166,30 +1131,17 @@ export default function TestCases() {
             </div>
             <div className="modal-body">
               {/* 目标层级选择 */}
-              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: '12px', marginBottom: '16px' }}>
-                <div className="form-group">
-                  <label className="form-label">项目</label>
-                  <select
-                    className="form-select"
-                    value={importProjectId}
-                    onChange={e => { setImportProjectId(e.target.value); setImportSuiteId(''); setImportFolderId('') }}
-                  >
-                    <option value="">选择项目</option>
-                    {projects.map(p => (
-                      <option key={p.id} value={p.id}>{p.name}</option>
-                    ))}
-                  </select>
-                </div>
+              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px', marginBottom: '16px' }}>
                 <div className="form-group">
                   <label className="form-label">测试套件</label>
                   <select
                     className="form-select"
                     value={importSuiteId}
                     onChange={e => { setImportSuiteId(e.target.value); setImportFolderId('') }}
-                    disabled={!importProjectId}
+                    disabled={!currentProject}
                   >
-                    <option value="">选择套件</option>
-                    {suites.filter(s => s.projectId === importProjectId).map(s => (
+                    <option value="">选择套件（可选）</option>
+                    {suites.filter(s => s.projectId === currentProject?.id).map(s => (
                       <option key={s.id} value={s.id}>{s.name}</option>
                     ))}
                   </select>
@@ -1202,7 +1154,7 @@ export default function TestCases() {
                     onChange={e => setImportFolderId(e.target.value)}
                     disabled={!importSuiteId}
                   >
-                    <option value="">选择文件夹</option>
+                    <option value="">选择文件夹（可选）</option>
                     {folders.filter(f => f.suiteId === importSuiteId && !f.parentId).map(f => (
                       <option key={f.id} value={f.id}>{f.name}</option>
                     ))}
@@ -1317,7 +1269,7 @@ export default function TestCases() {
             <div className="modal-footer">
               <div style={{ fontSize: '13px', color: 'var(--text-secondary)' }}>
                 导入到：
-                {importProjectId ? `项目: ${projects.find(p => p.id === importProjectId)?.name}` : '未选择'}
+                {currentProject ? `项目: ${currentProject.name}` : '未选择'}
                 {importSuiteId ? ` > 套件: ${suites.find(s => s.id === importSuiteId)?.name}` : ''}
                 {importFolderId ? ` > 文件夹: ${folders.find(f => f.id === importFolderId)?.name}` : ''}
               </div>
@@ -1327,7 +1279,7 @@ export default function TestCases() {
                   type="button"
                   className="btn btn-primary"
                   onClick={handleImport}
-                  disabled={!importFile || !importProjectId || importing}
+                  disabled={!importFile || !currentProject || importing}
                 >
                   {importing ? '导入中...' : '开始导入'}
                 </button>

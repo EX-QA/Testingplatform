@@ -45,6 +45,8 @@ export const projectsApi = {
   getMembers: (projectId: string) => api.get(`/projects/${projectId}/members`),
   addMember: (projectId: string, data: { userId: string; role?: string }) =>
     api.post(`/projects/${projectId}/members`, data),
+  addMembersBatch: (projectId: string, members: { userId: string; role?: string }[]) =>
+    api.post(`/projects/${projectId}/members/batch`, { members }),
   updateMember: (projectId: string, userId: string, data: { role: string }) =>
     api.put(`/projects/${projectId}/members/${userId}`, data),
   removeMember: (projectId: string, userId: string) =>
@@ -83,6 +85,7 @@ export const testCasesApi = {
   create: (data: any) => api.post('/test-cases', data),
   update: (id: string, data: any) => api.put(`/test-cases/${id}`, data),
   delete: (id: string) => api.delete(`/test-cases/${id}`),
+  deleteBatch: (ids: string[]) => api.post('/test-cases/batch-delete', { ids }),
   move: (id: string, data: { projectId?: string; suiteId?: string; folderId?: string }) =>
     api.patch(`/test-cases/${id}/move`, data),
   importCsv: (formData: FormData) =>

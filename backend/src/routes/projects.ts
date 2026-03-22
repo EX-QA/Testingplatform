@@ -5,7 +5,17 @@ import { authMiddleware, adminMiddleware, AuthRequest } from '../middleware/auth
 const router = Router();
 const prisma = new PrismaClient();
 
-// 获取所有项目 (admin可见所有，普通用户只看有权限的)
+/**
+ * @swagger
+ * /api/v1/projects:
+ *   get:
+ *     tags: [项目管理]
+ *     summary: 获取所有项目
+ *     description: admin可见所有项目，普通用户只可见自己是成员的项目
+ *     responses:
+ *       200:
+ *         description: 项目列表
+ */
 router.get('/', authMiddleware, async (req: AuthRequest, res) => {
   try {
     if (req.userRole === 'admin') {
@@ -43,7 +53,24 @@ router.get('/', authMiddleware, async (req: AuthRequest, res) => {
   }
 });
 
-// 获取单个项目
+/**
+ * @swagger
+ * /api/v1/projects/{id}:
+ *   get:
+ *     tags: [项目管理]
+ *     summary: 获取单个项目
+ *     parameters:
+ *       - in: path
+ *         name: id
+ *         required: true
+ *         schema:
+ *           type: string
+ *     responses:
+ *       200:
+ *         description: 项目详情
+ *       404:
+ *         description: 项目不存在
+ */
 router.get('/:id', authMiddleware, async (req: AuthRequest, res) => {
   try {
     const project = await prisma.project.findUnique({
@@ -79,7 +106,32 @@ router.get('/:id', authMiddleware, async (req: AuthRequest, res) => {
   }
 });
 
-// 创建项目 (admin)
+/**
+ * @swagger
+ * /api/v1/projects:
+ *   post:
+ *     tags: [项目管理]
+ *     summary: 创建项目
+ *     description: 仅admin可创建项目，创建者自动成为项目owner
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             required:
+ *               - name
+ *             properties:
+ *               name:
+ *                 type: string
+ *                 description: 项目名称
+ *               description:
+ *                 type: string
+ *                 description: 项目描述
+ *     responses:
+ *       201:
+ *         description: 创建成功
+ */
 router.post('/', authMiddleware, adminMiddleware, async (req: AuthRequest, res) => {
   try {
     const { name, description } = req.body;
@@ -112,7 +164,33 @@ router.post('/', authMiddleware, adminMiddleware, async (req: AuthRequest, res) 
   }
 });
 
-// 更新项目
+/**
+ * @swagger
+ * /api/v1/projects/{id}:
+ *   put:
+ *     tags: [项目管理]
+ *     summary: 更新项目
+ *     parameters:
+ *       - in: path
+ *         name: id
+ *         required: true
+ *         schema:
+ *           type: string
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             properties:
+ *               name:
+ *                 type: string
+ *               description:
+ *                 type: string
+ *     responses:
+ *       200:
+ *         description: 更新成功
+ */
 router.put('/:id', authMiddleware, async (req: AuthRequest, res) => {
   try {
     const { name, description } = req.body;
@@ -141,7 +219,23 @@ router.put('/:id', authMiddleware, async (req: AuthRequest, res) => {
   }
 });
 
-// 删除项目 (admin)
+/**
+ * @swagger
+ * /api/v1/projects/{id}:
+ *   delete:
+ *     tags: [项目管理]
+ *     summary: 删除项目
+ *     description: 仅admin可删除项目
+ *     parameters:
+ *       - in: path
+ *         name: id
+ *         required: true
+ *         schema:
+ *           type: string
+ *     responses:
+ *       200:
+ *         description: 删除成功
+ */
 router.delete('/:id', authMiddleware, adminMiddleware, async (req: AuthRequest, res) => {
   try {
     await prisma.project.delete({ where: { id: req.params.id } });
@@ -152,7 +246,16 @@ router.delete('/:id', authMiddleware, adminMiddleware, async (req: AuthRequest, 
   }
 });
 
-// 获取仪表盘统计数据
+/**
+ * @swagger
+ * /api/v1/projects/stats/summary:
+ *   get:
+ *     tags: [项目管理]
+ *     summary: 获取项目统计数据
+ *     responses:
+ *       200:
+ *         description: 统计数据
+ */
 router.get('/stats/summary', authMiddleware, async (req: AuthRequest, res) => {
   try {
     const [totalTestCases, projectsWithCounts] = await Promise.all([

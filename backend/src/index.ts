@@ -1,5 +1,6 @@
 import express from 'express';
 import cors from 'cors';
+import multer from 'multer';
 import { PrismaClient } from '@prisma/client';
 import swaggerJsdoc from 'swagger-jsdoc';
 import swaggerUi from 'swagger-ui-express';
@@ -19,6 +20,17 @@ import projectMembersRouter from './routes/projectMembers.js';
 const app = express();
 const PORT = process.env.PORT || 3001;
 const prisma = new PrismaClient();
+
+// Multer configuration for file uploads
+const upload = multer({
+  storage: multer.memoryStorage(),
+  limits: {
+    fileSize: 5 * 1024 * 1024 // 5MB limit
+  }
+});
+
+// Make upload available to routes
+app.set('upload', upload);
 
 app.use(cors());
 app.use(express.json());
@@ -60,7 +72,6 @@ const swaggerSpec = swaggerJsdoc(swaggerOptions);
 app.use('/api-docs', swaggerUi.serve, swaggerUi.setup(swaggerSpec, {
   customCss: '.swagger-ui .topbar { display: none }',
   customSiteTitle: 'QAForge API 文档',
-  apiUrl: `/api/v1`,
 }));
 
 // JSON 格式的 Swagger 文档

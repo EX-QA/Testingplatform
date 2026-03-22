@@ -5,7 +5,17 @@ import { authMiddleware, adminMiddleware, AuthRequest } from '../middleware/auth
 const router = Router();
 const prisma = new PrismaClient();
 
-// 获取所有用户 (admin)
+/**
+ * @swagger
+ * /api/v1/users:
+ *   get:
+ *     tags: [用户管理]
+ *     summary: 获取所有用户
+ *     description: 仅admin可访问
+ *     responses:
+ *       200:
+ *         description: 用户列表
+ */
 router.get('/', authMiddleware, adminMiddleware, async (req, res) => {
   try {
     const users = await prisma.user.findMany({
@@ -25,7 +35,35 @@ router.get('/', authMiddleware, adminMiddleware, async (req, res) => {
   }
 });
 
-// 更新用户角色 (admin)
+/**
+ * @swagger
+ * /api/v1/users/{id}/role:
+ *   put:
+ *     tags: [用户管理]
+ *     summary: 更新用户角色
+ *     description: 仅admin可访问
+ *     parameters:
+ *       - in: path
+ *         name: id
+ *         required: true
+ *         schema:
+ *           type: string
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             required:
+ *               - role
+ *             properties:
+ *               role:
+ *                 type: string
+ *                 enum: [admin, user]
+ *     responses:
+ *       200:
+ *         description: 更新成功
+ */
 router.put('/:id/role', authMiddleware, adminMiddleware, async (req: AuthRequest, res) => {
   try {
     const { id } = req.params;

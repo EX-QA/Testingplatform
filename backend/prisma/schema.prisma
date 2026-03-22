@@ -72,7 +72,6 @@ model TestCase {
   precondition String?
   steps        String
   expectedResult String?
-  status       String   @default("draft")
   createdAt    DateTime @default(now())
   updatedAt    DateTime @updatedAt
   creatorId    String?

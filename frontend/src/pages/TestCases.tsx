@@ -76,18 +76,27 @@ function DroppableTreeItem({
 }
 
 // 可排序的用例项
-function SortableTestCaseItem({ testCase, onEdit, onDelete }: { testCase: TestCase; onEdit: () => void; onDelete: () => void }) {
+function SortableTestCaseItem({ testCase, onEdit, onDelete, isSelected, onToggleSelect }: { testCase: TestCase; onEdit: () => void; onDelete: () => void; isSelected?: boolean; onToggleSelect?: () => void }) {
   const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({ id: testCase.id })
 
   const style = {
     transform: CSS.Transform.toString(transform),
     transition,
     opacity: isDragging ? 0.5 : 1,
+    backgroundColor: isSelected ? 'var(--primary-bg)' : undefined,
   }
 
   return (
     <tr ref={setNodeRef} style={style} {...attributes} {...listeners}>
-      <td style={{ width: '30px', cursor: 'grab' }}>⋮⋮</td>
+      <td style={{ width: '30px', cursor: 'grab' }}>
+        <input
+          type="checkbox"
+          checked={isSelected || false}
+          onChange={onToggleSelect}
+          onClick={(e) => e.stopPropagation()}
+          style={{ cursor: 'pointer' }}
+        />
+      </td>
       <td style={{ width: '80px', fontFamily: 'monospace', fontSize: '12px', color: 'var(--text-secondary)' }}>
         {testCase.id.slice(0, 8)}
       </td>
@@ -174,6 +183,10 @@ export default function TestCases() {
   // 删除状态
   const [deleteTarget, setDeleteTarget] = useState<{ type: 'project' | 'suite' | 'folder'; id: string; name: string } | null>(null)
   const [deleteCaseId, setDeleteCaseId] = useState<string | null>(null)
+
+  // 批量选择状态
+  const [selectedCaseIds, setSelectedCaseIds] = useState<Set<string>>(new Set())
+  const [batchDeleteConfirm, setBatchDeleteConfirm] = useState<string[] | null>(null)
 
   // 导入弹窗状态
   const [showImportModal, setShowImportModal] = useState(false)
@@ -593,6 +606,41 @@ export default function TestCases() {
   const displayCases = getSelectedCases()
   const activeCase = activeId ? cases.find(c => c.id === activeId) : null
 
+  // 选择辅助函数
+  const toggleCaseSelection = (id: string) => {
+    setSelectedCaseIds(prev => {
+      const next = new Set(prev)
+      if (next.has(id)) {
+        next.delete(id)
+      } else {
+        next.add(id)
+      }
+      return next
+    })
+  }
+
+  const toggleSelectAll = () => {
+    if (selectedCaseIds.size === displayCases.length) {
+      setSelectedCaseIds(new Set())
+    } else {
+      setSelectedCaseIds(new Set(displayCases.map(c => c.id)))
+    }
+  }
+
+  const isAllSelected = displayCases.length > 0 && selectedCaseIds.size === displayCases.length
+
+  const confirmBatchDelete = async () => {
+    if (!batchDeleteConfirm || batchDeleteConfirm.length === 0) return
+    try {
+      await testCasesApi.deleteBatch(batchDeleteConfirm)
+      setSelectedCaseIds(new Set())
+      setBatchDeleteConfirm(null)
+      fetchAllData()
+    } catch (error) {
+      console.error('Failed to batch delete test cases:', error)
+    }
+  }
+
   // 处理拖拽结束
   const handleDragEnd = async (event: any) => {
     const { active, over } = event
@@ -651,6 +699,14 @@ export default function TestCases() {
         <header className="page-header">
           <h2>测试用例</h2>
           <div style={{ display: 'flex', gap: '8px' }}>
+            {selectedCaseIds.size > 0 && (
+              <button
+                className="btn btn-danger"
+                onClick={() => setBatchDeleteConfirm(Array.from(selectedCaseIds))}
+              >
+                <Trash2 size={18} />删除已选({selectedCaseIds.size})
+              </button>
+            )}
             <button
               className="btn btn-secondary"
               onClick={() => setShowImportModal(true)}
@@ -674,9 +730,11 @@ export default function TestCases() {
             <div className="card" style={{ width: '320px', flexShrink: 0, maxHeight: 'calc(100vh - 180px)', overflow: 'auto' }}>
               <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '16px' }}>
                 <h3 style={{ fontSize: '14px', fontWeight: 600 }}>项目结构</h3>
-                <button className="btn btn-secondary btn-sm" onClick={() => setShowProjectModal(true)}>
-                  <Plus size={14} />
-                </button>
+                {user?.role === 'admin' && (
+                  <button className="btn btn-secondary btn-sm" onClick={() => setShowProjectModal(true)}>
+                    <Plus size={14} />
+                  </button>
+                )}
               </div>
 
               {loading ? (
@@ -803,8 +861,14 @@ export default function TestCases() {
                   ))}
 
                   {projects.length === 0 && (
-                    <div style={{ padding: '20px', textAlign: 'center', color: 'var(--text-secondary)' }}>
-                      暂无项目，点击上方 + 创建
+                    <div className="empty-state">
+                      <FolderOpen size={48} style={{ opacity: 0.3, marginBottom: '12px' }} />
+                      <h3 style={{ fontSize: '14px', color: 'var(--text-secondary)', marginBottom: '8px' }}>暂无项目</h3>
+                      {user?.role === 'admin' ? (
+                        <p style={{ fontSize: '13px', color: 'var(--text-secondary)' }}>点击上方 <strong>+</strong> 按钮创建首个项目</p>
+                      ) : (
+                        <p style={{ fontSize: '13px', color: 'var(--text-secondary)' }}>您还没有项目，请联系管理员添加</p>
+                      )}
                     </div>
                   )}
                 </div>
@@ -846,7 +910,14 @@ export default function TestCases() {
                     <table>
                       <thead>
                         <tr>
-                          <th style={{ width: '30px' }}></th>
+                          <th style={{ width: '50px' }}>
+                            <input
+                              type="checkbox"
+                              checked={isAllSelected}
+                              onChange={toggleSelectAll}
+                              style={{ cursor: 'pointer' }}
+                            />
+                          </th>
                           <th style={{ width: '80px' }}>ID</th>
                           <th>标题</th>
                           <th>模块</th>
@@ -864,6 +935,8 @@ export default function TestCases() {
                             testCase={testCase}
                             onEdit={() => { setEditingCase(testCase); setShowModal(true) }}
                             onDelete={() => handleDelete(testCase.id)}
+                            isSelected={selectedCaseIds.has(testCase.id)}
+                            onToggleSelect={() => toggleCaseSelection(testCase.id)}
                           />
                         ))}
                       </tbody>
@@ -1065,6 +1138,18 @@ export default function TestCases() {
           message="确定要删除这个测试用例吗？"
           onConfirm={confirmDeleteCase}
           onCancel={() => setDeleteCaseId(null)}
+          variant="danger"
+        />
+      )}
+
+      {/* 批量删除测试用例确认弹窗 */}
+      {batchDeleteConfirm && (
+        <ConfirmDialog
+          open={true}
+          title="确认批量删除"
+          message={`确定要删除选中的 ${batchDeleteConfirm.length} 个测试用例吗？此操作不可恢复。`}
+          onConfirm={confirmBatchDelete}
+          onCancel={() => setBatchDeleteConfirm(null)}
           variant="danger"
         />
       )}

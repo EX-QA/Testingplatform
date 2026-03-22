@@ -1,7 +1,7 @@
 {
-  "name": "testhub-backend",
+  "name": "qaforge-backend",
   "version": "1.0.0",
-  "description": "TestHub Backend API",
+  "description": "QAForge Backend API",
   "main": "dist/index.js",
   "scripts": {
     "dev": "tsx watch src/index.ts",

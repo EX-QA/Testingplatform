@@ -455,6 +455,38 @@ router.put('/:id', async (req, res) => {
   }
 });
 
+/**
+ * @swagger
+ * /api/v1/test-cases/{id}/move:
+ *   patch:
+ *     tags: [测试用例]
+ *     summary: 移动测试用例
+ *     parameters:
+ *       - in: path
+ *         name: id
+ *         required: true
+ *         schema:
+ *           type: string
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             properties:
+ *               projectId:
+ *                 type: string
+ *                 description: 目标项目ID
+ *               suiteId:
+ *                 type: string
+ *                 description: 目标测试套件ID
+ *               folderId:
+ *                 type: string
+ *                 description: 目标文件夹ID
+ *     responses:
+ *       200:
+ *         description: 移动成功
+ */
 // 移动测试用例到指定节点
 router.patch('/:id/move', async (req, res) => {
   try {
@@ -483,6 +515,48 @@ router.delete('/:id', async (req, res) => {
   } catch (error) {
     console.error('Failed to delete test case:', error);
     res.status(500).json({ error: 'Failed to delete test case' });
+  }
+});
+
+/**
+ * @swagger
+ * /api/v1/test-cases/batch-delete:
+ *   post:
+ *     tags: [测试用例]
+ *     summary: 批量删除测试用例
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             required:
+ *               - ids
+ *             properties:
+ *               ids:
+ *                 type: array
+ *                 items:
+ *                   type: string
+ *                 description: 要删除的测试用例ID数组
+ *     responses:
+ *       200:
+ *         description: 删除成功
+ *       500:
+ *         description: 删除失败
+ */
+router.post('/batch-delete', async (req, res) => {
+  try {
+    const { ids } = req.body;
+    if (!Array.isArray(ids) || ids.length === 0) {
+      return res.status(400).json({ error: 'ids must be a non-empty array' });
+    }
+    const result = await prisma.testCase.deleteMany({
+      where: { id: { in: ids } }
+    });
+    res.json({ success: true, deletedCount: result.count });
+  } catch (error) {
+    console.error('Failed to batch delete test cases:', error);
+    res.status(500).json({ error: 'Failed to batch delete test cases' });
   }
 });
 

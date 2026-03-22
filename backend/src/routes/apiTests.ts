@@ -1,8 +1,29 @@
 import { Router } from 'express';
 import { spawn } from 'child_process';
 import prisma from '../prisma/index.js';
+import { authMiddleware, AuthRequest } from '../middleware/auth.js';
 
 const router = Router();
+
+// Helper to get user's accessible project IDs
+async function getUserProjectIds(userId: string, userRole: string): Promise<string[]> {
+  if (userRole === 'admin') {
+    const projects = await prisma.project.findMany({ select: { id: true } });
+    return projects.map(p => p.id);
+  }
+  const memberships = await prisma.projectMember.findMany({
+    where: { userId },
+    select: { projectId: true }
+  });
+  return memberships.map(m => m.projectId);
+}
+
+// Helper to check if user has access to a specific project
+async function hasProjectAccess(userId: string, userRole: string, projectId: string | null): Promise<boolean> {
+  if (!projectId) return false;
+  const userProjectIds = await getUserProjectIds(userId, userRole);
+  return userProjectIds.includes(projectId);
+}
 
 /**
  * @swagger
@@ -38,9 +59,20 @@ const router = Router();
  *       201:
  *         description: 保存成功
  */
-router.get('/', async (req, res) => {
+router.get('/', authMiddleware, async (req: AuthRequest, res) => {
   try {
+    const { projectId } = req.query;
+    const userProjectIds = await getUserProjectIds(req.userId!, req.userRole!);
+
+    const where: any = {
+      projectId: { in: userProjectIds }
+    };
+    if (projectId && userProjectIds.includes(projectId as string)) {
+      where.projectId = projectId;
+    }
+
     const tests = await prisma.apiTest.findMany({
+      where,
       orderBy: { createdAt: 'desc' }
     });
     res.json(tests);
@@ -78,7 +110,7 @@ router.get('/', async (req, res) => {
  *       200:
  *         description: 执行成功
  */
-router.post('/execute', async (req, res) => {
+router.post('/execute', authMiddleware, async (req: AuthRequest, res) => {
   try {
     const { url, method, headers, body } = req.body;
 
@@ -171,9 +203,17 @@ except Exception as e:
  *       204:
  *         description: 删除成功
  */
-router.put('/:id', async (req, res) => {
+router.put('/:id', authMiddleware, async (req: AuthRequest, res) => {
   try {
     const { name, url, method, headers, body, status } = req.body;
+    const existing = await prisma.apiTest.findUnique({ where: { id: req.params.id } });
+    if (!existing) {
+      return res.status(404).json({ error: 'API test not found' });
+    }
+    const userProjectIds = await getUserProjectIds(req.userId!, req.userRole!);
+    if (!existing.projectId || !userProjectIds.includes(existing.projectId)) {
+      return res.status(403).json({ error: '无权限修改此接口测试' });
+    }
     const test = await prisma.apiTest.update({
       where: { id: req.params.id },
       data: {
@@ -191,14 +231,81 @@ router.put('/:id', async (req, res) => {
   }
 });
 
-router.delete('/:id', async (req, res) => {
+router.delete('/:id', authMiddleware, async (req: AuthRequest, res) => {
   try {
+    const existing = await prisma.apiTest.findUnique({ where: { id: req.params.id } });
+    if (!existing) {
+      return res.status(404).json({ error: 'API test not found' });
+    }
+    const userProjectIds = await getUserProjectIds(req.userId!, req.userRole!);
+    if (!existing.projectId || !userProjectIds.includes(existing.projectId)) {
+      return res.status(403).json({ error: '无权限删除此接口测试' });
+    }
     await prisma.apiTest.delete({
       where: { id: req.params.id }
     });
     res.status(204).send();
   } catch (error) {
     res.status(500).json({ error: 'Failed to delete API test' });
+  }
+});
+
+/**
+ * @swagger
+ * /api/v1/api-tests/save:
+ *   post:
+ *     tags: [接口测试]
+ *     summary: 保存接口测试
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             required:
+ *               - name
+ *               - url
+ *               - method
+ *             properties:
+ *               name:
+ *                 type: string
+ *               url:
+ *                 type: string
+ *               method:
+ *                 type: string
+ *                 enum: [GET, POST, PUT, DELETE, PATCH]
+ *               headers:
+ *                 type: string
+ *               body:
+ *                 type: string
+ *               projectId:
+ *                 type: string
+ *     responses:
+ *       201:
+ *         description: 保存成功
+ */
+router.post('/save', authMiddleware, async (req: AuthRequest, res) => {
+  try {
+    const { name, url, method, headers, body, projectId } = req.body;
+    if (projectId && req.userRole !== 'admin') {
+      const userProjectIds = await getUserProjectIds(req.userId!, req.userRole!);
+      if (!userProjectIds.includes(projectId)) {
+        return res.status(403).json({ error: '无权限在此项目中保存接口测试' });
+      }
+    }
+    const test = await prisma.apiTest.create({
+      data: {
+        name,
+        url,
+        method,
+        headers,
+        body,
+        projectId: projectId || null
+      }
+    });
+    res.status(201).json(test);
+  } catch (error) {
+    res.status(500).json({ error: 'Failed to save API test' });
   }
 });
 
@@ -217,7 +324,7 @@ router.delete('/:id', async (req, res) => {
  *       200:
  *         description: 成功获取
  */
-router.get('/history', async (req, res) => {
+router.get('/history', authMiddleware, async (req: AuthRequest, res) => {
   try {
     const { testId } = req.query;
     const where: any = {};

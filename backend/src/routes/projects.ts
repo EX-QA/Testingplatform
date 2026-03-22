@@ -258,9 +258,26 @@ router.delete('/:id', authMiddleware, adminMiddleware, async (req: AuthRequest, 
  */
 router.get('/stats/summary', authMiddleware, async (req: AuthRequest, res) => {
   try {
+    // Get user's accessible projects
+    let userProjectFilter: { id: { in: string[] } } | undefined;
+    if (req.userRole !== 'admin') {
+      const memberships = await prisma.projectMember.findMany({
+        where: { userId: req.userId },
+        select: { projectId: true }
+      });
+      const projectIds = memberships.map(m => m.projectId);
+      if (projectIds.length === 0) {
+        return res.json({ totalTestCases: 0, projects: [] });
+      }
+      userProjectFilter = { id: { in: projectIds } };
+    }
+
     const [totalTestCases, projectsWithCounts] = await Promise.all([
-      prisma.testCase.count(),
+      userProjectFilter
+        ? prisma.testCase.count({ where: { projectId: { in: userProjectFilter.id.in } } })
+        : prisma.testCase.count(),
       prisma.project.findMany({
+        where: userProjectFilter,
         select: {
           id: true,
           name: true,

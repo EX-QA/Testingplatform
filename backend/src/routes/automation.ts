@@ -1,8 +1,29 @@
 import { Router } from 'express';
 import { spawn } from 'child_process';
 import prisma from '../prisma/index.js';
+import { authMiddleware, AuthRequest } from '../middleware/auth.js';
 
 const router = Router();
+
+// Helper to get user's accessible project IDs
+async function getUserProjectIds(userId: string, userRole: string): Promise<string[]> {
+  if (userRole === 'admin') {
+    const projects = await prisma.project.findMany({ select: { id: true } });
+    return projects.map(p => p.id);
+  }
+  const memberships = await prisma.projectMember.findMany({
+    where: { userId },
+    select: { projectId: true }
+  });
+  return memberships.map(m => m.projectId);
+}
+
+// Helper to check if user has access to a specific project
+async function hasProjectAccess(userId: string, userRole: string, projectId: string | null): Promise<boolean> {
+  if (!projectId) return false;
+  const userProjectIds = await getUserProjectIds(userId, userRole);
+  return userProjectIds.includes(projectId);
+}
 
 /**
  * @swagger
@@ -47,11 +68,18 @@ const router = Router();
  *       201:
  *         description: 创建成功
  */
-router.get('/', async (req, res) => {
+router.get('/', authMiddleware, async (req: AuthRequest, res) => {
   try {
-    const { status } = req.query;
-    const where: any = {};
+    const { status, projectId } = req.query;
+    const userProjectIds = await getUserProjectIds(req.userId!, req.userRole!);
+
+    const where: any = {
+      projectId: { in: userProjectIds }
+    };
     if (status) where.status = status;
+    if (projectId && userProjectIds.includes(projectId as string)) {
+      where.projectId = projectId;
+    }
 
     const scripts = await prisma.automationScript.findMany({
       where,
@@ -115,7 +143,7 @@ router.get('/', async (req, res) => {
  *       200:
  *         description: 执行成功
  */
-router.get('/:id', async (req, res) => {
+router.get('/:id', authMiddleware, async (req: AuthRequest, res) => {
   try {
     const script = await prisma.automationScript.findUnique({
       where: { id: req.params.id }
@@ -123,22 +151,33 @@ router.get('/:id', async (req, res) => {
     if (!script) {
       return res.status(404).json({ error: 'Script not found' });
     }
+    const userProjectIds = await getUserProjectIds(req.userId!, req.userRole!);
+    if (!script.projectId || !userProjectIds.includes(script.projectId)) {
+      return res.status(403).json({ error: '无权限访问此脚本' });
+    }
     res.json(script);
   } catch (error) {
     res.status(500).json({ error: 'Failed to fetch script' });
   }
 });
 
-router.post('/', async (req, res) => {
+router.post('/', authMiddleware, async (req: AuthRequest, res) => {
   try {
-    const { name, description, scriptType, content, status } = req.body;
+    const { name, description, scriptType, content, status, projectId } = req.body;
+    if (projectId && req.userRole !== 'admin') {
+      const userProjectIds = await getUserProjectIds(req.userId!, req.userRole!);
+      if (!userProjectIds.includes(projectId)) {
+        return res.status(403).json({ error: '无权限在此项目中创建脚本' });
+      }
+    }
     const script = await prisma.automationScript.create({
       data: {
         name,
         description,
         scriptType: scriptType || 'python',
         content,
-        status: status || 'enabled'
+        status: status || 'enabled',
+        projectId: projectId || null
       }
     });
     res.status(201).json(script);
@@ -147,9 +186,17 @@ router.post('/', async (req, res) => {
   }
 });
 
-router.put('/:id', async (req, res) => {
+router.put('/:id', authMiddleware, async (req: AuthRequest, res) => {
   try {
-    const { name, description, scriptType, content, status } = req.body;
+    const { name, description, scriptType, content, status, projectId } = req.body;
+    const existing = await prisma.automationScript.findUnique({ where: { id: req.params.id } });
+    if (!existing) {
+      return res.status(404).json({ error: 'Script not found' });
+    }
+    const userProjectIds = await getUserProjectIds(req.userId!, req.userRole!);
+    if (!existing.projectId || !userProjectIds.includes(existing.projectId)) {
+      return res.status(403).json({ error: '无权限修改此脚本' });
+    }
     const script = await prisma.automationScript.update({
       where: { id: req.params.id },
       data: {
@@ -157,7 +204,8 @@ router.put('/:id', async (req, res) => {
         description,
         scriptType,
         content,
-        status
+        status,
+        projectId: projectId || null
       }
     });
     res.json(script);
@@ -166,8 +214,16 @@ router.put('/:id', async (req, res) => {
   }
 });
 
-router.delete('/:id', async (req, res) => {
+router.delete('/:id', authMiddleware, async (req: AuthRequest, res) => {
   try {
+    const existing = await prisma.automationScript.findUnique({ where: { id: req.params.id } });
+    if (!existing) {
+      return res.status(404).json({ error: 'Script not found' });
+    }
+    const userProjectIds = await getUserProjectIds(req.userId!, req.userRole!);
+    if (!existing.projectId || !userProjectIds.includes(existing.projectId)) {
+      return res.status(403).json({ error: '无权限删除此脚本' });
+    }
     await prisma.automationScript.delete({
       where: { id: req.params.id }
     });
@@ -177,7 +233,7 @@ router.delete('/:id', async (req, res) => {
   }
 });
 
-router.post('/:id/execute', async (req, res) => {
+router.post('/:id/execute', authMiddleware, async (req: AuthRequest, res) => {
   try {
     const script = await prisma.automationScript.findUnique({
       where: { id: req.params.id }
@@ -185,6 +241,10 @@ router.post('/:id/execute', async (req, res) => {
 
     if (!script) {
       return res.status(404).json({ error: 'Script not found' });
+    }
+    const userProjectIds = await getUserProjectIds(req.userId!, req.userRole!);
+    if (!script.projectId || !userProjectIds.includes(script.projectId)) {
+      return res.status(403).json({ error: '无权限执行此脚本' });
     }
 
     const python = spawn('python', ['-c', script.content]);
@@ -202,7 +262,6 @@ router.post('/:id/execute', async (req, res) => {
 
     python.on('close', async (code) => {
       const result = code === 0 ? 'passed' : 'failed';
-      const resultDetails = code === 0 ? output : errorOutput;
 
       await prisma.automationScript.update({
         where: { id: req.params.id },

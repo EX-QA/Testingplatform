@@ -1,7 +1,28 @@
 import { Router } from 'express';
 import prisma from '../prisma/index.js';
+import { authMiddleware, AuthRequest } from '../middleware/auth.js';
 
 const router = Router();
+
+// Helper to get user's accessible project IDs
+async function getUserProjectIds(userId: string, userRole: string): Promise<string[]> {
+  if (userRole === 'admin') {
+    const projects = await prisma.project.findMany({ select: { id: true } });
+    return projects.map(p => p.id);
+  }
+  const memberships = await prisma.projectMember.findMany({
+    where: { userId },
+    select: { projectId: true }
+  });
+  return memberships.map(m => m.projectId);
+}
+
+// Helper to check if user has access to a specific project
+async function hasProjectAccess(userId: string, userRole: string, projectId: string | null): Promise<boolean> {
+  if (!projectId) return false;
+  const userProjectIds = await getUserProjectIds(userId, userRole);
+  return userProjectIds.includes(projectId);
+}
 
 /**
  * @swagger
@@ -47,12 +68,19 @@ const router = Router();
  *       201:
  *         description: 创建成功
  */
-router.get('/', async (req, res) => {
+router.get('/', authMiddleware, async (req: AuthRequest, res) => {
   try {
-    const { status } = req.query;
-    const where: any = {};
+    const { status, projectId } = req.query;
+    const userProjectIds = await getUserProjectIds(req.userId!, req.userRole!);
+
+    const where: any = {
+      projectId: { in: userProjectIds }
+    };
 
     if (status) where.status = status;
+    if (projectId && userProjectIds.includes(projectId as string)) {
+      where.projectId = projectId;
+    }
 
     const plans = await prisma.testPlan.findMany({
       where,
@@ -137,7 +165,7 @@ router.get('/', async (req, res) => {
  *       201:
  *         description: 执行成功
  */
-router.get('/:id', async (req, res) => {
+router.get('/:id', authMiddleware, async (req: AuthRequest, res) => {
   try {
     const plan = await prisma.testPlan.findUnique({
       where: { id: req.params.id },
@@ -155,16 +183,25 @@ router.get('/:id', async (req, res) => {
     if (!plan) {
       return res.status(404).json({ error: 'Test plan not found' });
     }
+    const userProjectIds = await getUserProjectIds(req.userId!, req.userRole!);
+    if (!plan.projectId || !userProjectIds.includes(plan.projectId)) {
+      return res.status(403).json({ error: '无权限访问此测试计划' });
+    }
     res.json(plan);
   } catch (error) {
     res.status(500).json({ error: 'Failed to fetch test plan' });
   }
 });
 
-router.post('/', async (req, res) => {
+router.post('/', authMiddleware, async (req: AuthRequest, res) => {
   try {
-    const { name, description, status, startDate, endDate, caseIds } = req.body;
-
+    const { name, description, status, startDate, endDate, caseIds, projectId } = req.body;
+    if (projectId && req.userRole !== 'admin') {
+      const userProjectIds = await getUserProjectIds(req.userId!, req.userRole!);
+      if (!userProjectIds.includes(projectId)) {
+        return res.status(403).json({ error: '无权限在此项目中创建测试计划' });
+      }
+    }
     const plan = await prisma.testPlan.create({
       data: {
         name,
@@ -172,6 +209,7 @@ router.post('/', async (req, res) => {
         status: status || 'draft',
         startDate: startDate ? new Date(startDate) : null,
         endDate: endDate ? new Date(endDate) : null,
+        projectId: projectId || null,
         items: caseIds ? {
           create: caseIds.map((caseId: string) => ({ caseId }))
         } : undefined
@@ -190,10 +228,17 @@ router.post('/', async (req, res) => {
   }
 });
 
-router.put('/:id', async (req, res) => {
+router.put('/:id', authMiddleware, async (req: AuthRequest, res) => {
   try {
-    const { name, description, status, startDate, endDate, caseIds } = req.body;
-
+    const { name, description, status, startDate, endDate, caseIds, projectId } = req.body;
+    const existing = await prisma.testPlan.findUnique({ where: { id: req.params.id } });
+    if (!existing) {
+      return res.status(404).json({ error: 'Test plan not found' });
+    }
+    const userProjectIds = await getUserProjectIds(req.userId!, req.userRole!);
+    if (!existing.projectId || !userProjectIds.includes(existing.projectId)) {
+      return res.status(403).json({ error: '无权限修改此测试计划' });
+    }
     await prisma.planItem.deleteMany({
       where: { planId: req.params.id }
     });
@@ -206,6 +251,7 @@ router.put('/:id', async (req, res) => {
         status,
         startDate: startDate ? new Date(startDate) : null,
         endDate: endDate ? new Date(endDate) : null,
+        projectId: projectId || null,
         items: caseIds ? {
           create: caseIds.map((caseId: string) => ({ caseId }))
         } : undefined
@@ -224,8 +270,16 @@ router.put('/:id', async (req, res) => {
   }
 });
 
-router.delete('/:id', async (req, res) => {
+router.delete('/:id', authMiddleware, async (req: AuthRequest, res) => {
   try {
+    const existing = await prisma.testPlan.findUnique({ where: { id: req.params.id } });
+    if (!existing) {
+      return res.status(404).json({ error: 'Test plan not found' });
+    }
+    const userProjectIds = await getUserProjectIds(req.userId!, req.userRole!);
+    if (!existing.projectId || !userProjectIds.includes(existing.projectId)) {
+      return res.status(403).json({ error: '无权限删除此测试计划' });
+    }
     await prisma.testPlan.delete({
       where: { id: req.params.id }
     });
@@ -235,7 +289,7 @@ router.delete('/:id', async (req, res) => {
   }
 });
 
-router.post('/:id/execute', async (req, res) => {
+router.post('/:id/execute', authMiddleware, async (req: AuthRequest, res) => {
   try {
     const { executor, notes } = req.body;
 
@@ -253,6 +307,10 @@ router.post('/:id/execute', async (req, res) => {
     if (!plan) {
       return res.status(404).json({ error: 'Test plan not found' });
     }
+    const userProjectIds = await getUserProjectIds(req.userId!, req.userRole!);
+    if (!plan.projectId || !userProjectIds.includes(plan.projectId)) {
+      return res.status(403).json({ error: '无权限执行此测试计划' });
+    }
 
     const results = plan.items.map(item => ({
       caseId: item.caseId,
@@ -266,7 +324,7 @@ router.post('/:id/execute', async (req, res) => {
     const execution = await prisma.planExecution.create({
       data: {
         planId: req.params.id,
-        executor,
+        executor: executor || req.username,
         result: resultStatus,
         notes
       }

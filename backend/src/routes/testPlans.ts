@@ -130,40 +130,6 @@ router.get('/', authMiddleware, async (req: AuthRequest, res) => {
  *     responses:
  *       200:
  *         description: 更新成功
- *   delete:
- *     tags: [测试计划]
- *     summary: 删除测试计划
- *     parameters:
- *       - in: path
- *         name: id
- *         required: true
- *         schema:
- *           type: string
- *     responses:
- *       204:
- *         description: 删除成功
- *   post:
- *     tags: [测试计划]
- *     summary: 执行测试计划
- *     parameters:
- *       - in: path
- *         name: id
- *         required: true
- *         schema:
- *           type: string
- *     requestBody:
- *       content:
- *         application/json:
- *           schema:
- *             type: object
- *             properties:
- *               executor:
- *                 type: string
- *               notes:
- *                 type: string
- *     responses:
- *       201:
- *         description: 执行成功
  */
 router.get('/:id', authMiddleware, async (req: AuthRequest, res) => {
   try {
@@ -270,6 +236,26 @@ router.put('/:id', authMiddleware, async (req: AuthRequest, res) => {
   }
 });
 
+/**
+ * @swagger
+ * /api/v1/test-plans/{id}:
+ *   delete:
+ *     tags: [测试计划]
+ *     summary: 删除测试计划
+ *     parameters:
+ *       - in: path
+ *         name: id
+ *         required: true
+ *         schema:
+ *           type: string
+ *     responses:
+ *       204:
+ *         description: 删除成功
+ *       403:
+ *         description: 无权限删除此测试计划
+ *       404:
+ *         description: 测试计划不存在
+ */
 router.delete('/:id', authMiddleware, async (req: AuthRequest, res) => {
   try {
     const existing = await prisma.testPlan.findUnique({ where: { id: req.params.id } });
@@ -289,6 +275,56 @@ router.delete('/:id', authMiddleware, async (req: AuthRequest, res) => {
   }
 });
 
+/**
+ * @swagger
+ * /api/v1/test-plans/{id}/execute:
+ *   post:
+ *     tags: [测试计划]
+ *     summary: 执行测试计划
+ *     parameters:
+ *       - in: path
+ *         name: id
+ *         required: true
+ *         schema:
+ *           type: string
+ *     requestBody:
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             properties:
+ *               executor:
+ *                 type: string
+ *                 description: 执行人
+ *               notes:
+ *                 type: string
+ *                 description: 执行备注
+ *     responses:
+ *       201:
+ *         description: 执行成功
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 execution:
+ *                   type: object
+ *                 results:
+ *                   type: array
+ *                 summary:
+ *                   type: object
+ *                   properties:
+ *                     total:
+ *                       type: integer
+ *                     passed:
+ *                       type: integer
+ *                     failed:
+ *                       type: integer
+ *       403:
+ *         description: 无权限执行此测试计划
+ *       404:
+ *         description: 测试计划不存在
+ */
 router.post('/:id/execute', authMiddleware, async (req: AuthRequest, res) => {
   try {
     const { executor, notes } = req.body;

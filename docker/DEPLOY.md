@@ -1,4 +1,4 @@
-# Docker 部署指南 - TestHub (QAForge)
+# Docker 部署指南 - QAForge
 
 ## 前置要求
 
@@ -28,17 +28,17 @@ sudo usermod -aG docker $USER
 
 ```bash
 # 方式 A: Git 克隆
-git clone <your-repo-url> /opt/testhub
-cd /opt/testhub
+git clone <your-repo-url> /opt/qaforge
+cd /opt/qaforge
 
 # 方式 B: SCP 上传
-scp -r ./testingplatform user@your-server:/opt/testhub
+scp -r ./testingplatform user@your-server:/opt/qaforge
 ```
 
 ### 3. 配置环境变量
 
 ```bash
-cd /opt/testhub
+cd /opt/qaforge
 
 # 复制环境变量模板
 cp docker/.env.example .env
@@ -122,13 +122,13 @@ docker-compose up -d
 mkdir -p backups
 
 # 备份
-docker-compose exec db pg_dump -U testhub testhub > backups/testhub_$(date +%Y%m%d_%H%M%S).sql
+docker-compose exec db pg_dump -U qaforge qaforge > backups/qaforge_$(date +%Y%m%d_%H%M%S).sql
 ```
 
 ### 恢复数据库
 
 ```bash
-docker-compose exec -T db psql -U testhub testhub < backups/testhub_backup.sql
+docker-compose exec -T db psql -U qaforge qaforge < backups/qaforge_backup.sql
 ```
 
 ### 停止服务
@@ -150,7 +150,7 @@ docker-compose down -v
 如果需要 HTTPS 和域名，在服务器上安装 Nginx:
 
 ```nginx
-# /etc/nginx/sites-available/testhub
+# /etc/nginx/sites-available/qaforge
 server {
     listen 80;
     server_name your-domain.com;
@@ -166,19 +166,19 @@ server {
 ### systemd 服务 (服务器重启后自动启动)
 
 ```bash
-sudo nano /etc/systemd/system/testhub.service
+sudo nano /etc/systemd/system/qaforge.service
 ```
 
 ```ini
 [Unit]
-Description=TestHub Docker Compose
+Description=QAForge Docker Compose
 Requires=docker-compose.service
 After=network-online.target
 
 [Service]
 Type=oneshot
 RemainAfterExit=yes
-WorkingDirectory=/opt/testhub
+WorkingDirectory=/opt/qaforge
 ExecStart=/usr/local/bin/docker-compose up -d
 ExecStop=/usr/local/bin/docker-compose down
 TimeoutStartSec=0
@@ -188,8 +188,8 @@ WantedBy=multi-user.target
 ```
 
 ```bash
-sudo systemctl enable testhub
-sudo systemctl start testhub
+sudo systemctl enable qaforge
+sudo systemctl start qaforge
 ```
 
 ## 故障排查
@@ -208,7 +208,7 @@ docker-compose exec backend sh
 
 ```bash
 # 检查数据库是否就绪
-docker-compose exec db pg_isready -U testhub
+docker-compose exec db pg_isready -U qaforge
 
 # 检查连接
 docker-compose exec backend sh -c 'echo $DATABASE_URL'

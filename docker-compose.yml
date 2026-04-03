@@ -30,11 +30,11 @@ services:
       context: ./backend
       dockerfile: Dockerfile
     environment:
-      - DATABASE_URL=postgresql://${DB_USER:-testhub}:${DB_PASSWORD:-testhub123}@db:5432/${DB_NAME:-testhub}
+      - DATABASE_URL=postgresql://${DB_USER:-qaforge}:${DB_PASSWORD:-qaforge123}@db:5432/${DB_NAME:-qaforge}
       - DB_HOST=db
-      - DB_USER=${DB_USER:-testhub}
-      - DB_PASSWORD=${DB_PASSWORD:-testhub123}
-      - DB_NAME=${DB_NAME:-testhub}
+      - DB_USER=${DB_USER:-qaforge}
+      - DB_PASSWORD=${DB_PASSWORD:-qaforge123}
+      - DB_NAME=${DB_NAME:-qaforge}
       - JWT_SECRET=${JWT_SECRET:-change-me-in-production}
       - JWT_EXPIRES_IN=${JWT_EXPIRES_IN:-7d}
       - PORT=3001
@@ -54,15 +54,15 @@ services:
   db:
     image: postgres:16-alpine
     environment:
-      - POSTGRES_USER=${DB_USER:-testhub}
-      - POSTGRES_PASSWORD=${DB_PASSWORD:-testhub123}
-      - POSTGRES_DB=${DB_NAME:-testhub}
+      - POSTGRES_USER=${DB_USER:-qaforge}
+      - POSTGRES_PASSWORD=${DB_PASSWORD:-qaforge123}
+      - POSTGRES_DB=${DB_NAME:-qaforge}
     volumes:
       - postgres_data:/var/lib/postgresql/data
     networks:
       - app-network
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U ${DB_USER:-testhub} -d ${DB_NAME:-testhub}"]
+      test: ["CMD-SHELL", "pg_isready -U ${DB_USER:-qaforge} -d ${DB_NAME:-qaforge}"]
       interval: 5s
       timeout: 5s
       retries: 5

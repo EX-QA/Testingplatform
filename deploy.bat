@@ -1,6 +1,6 @@
 @echo off
 echo ======================================
-echo  TestHub Docker 一键部署脚本
+echo  QAForge Docker 一键部署脚本
 echo ======================================
 
 echo [1/5] 检查 Docker 环境...
